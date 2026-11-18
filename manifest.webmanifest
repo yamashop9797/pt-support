@@ -1,0 +1,16 @@
+{
+  "name": "PTサポート",
+  "short_name": "PTサポート",
+  "description": "理学療法士の担当業務の期日とお知らせをまとめるアプリ",
+  "lang": "ja",
+  "start_url": "./index.html#/today",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f2f4f7",
+  "theme_color": "#f2f4f7",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
