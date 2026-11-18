@@ -1,8 +1,8 @@
-// 計算の部品のテスト(node --test tests で実行)
+// 計算の部品のテスト(node --test logic.test.mjs で実行)
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import * as L from '../js/logic.js';
-import { weekStart } from '../js/dates.js';
+import * as L from './logic.js';
+import { weekStart } from './dates.js';
 
 function mkState(over = {}) {
   return {

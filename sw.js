@@ -1,19 +1,19 @@
 // オフラインでも動くように、アプリのファイルをiPhoneにしまっておく係
 // ファイルを直したら VERSION の数字を上げる(新しいものに入れかわる)
-const VERSION = 'v1.0.0';
+const VERSION = 'v1.0.1';
 const FILES = [
   './',
   './index.html',
-  './css/style.css',
-  './js/app.js',
-  './js/db.js',
-  './js/dates.js',
-  './js/logic.js',
-  './js/messages.js',
+  './style.css',
+  './app.js',
+  './db.js',
+  './dates.js',
+  './logic.js',
+  './messages.js',
   './manifest.webmanifest',
-  './icons/icon-192.png',
-  './icons/icon-512.png',
-  './icons/apple-touch-icon.png',
+  './icon-192.png',
+  './icon-512.png',
+  './apple-touch-icon.png',
 ];
 
 self.addEventListener('install', (e) => {
