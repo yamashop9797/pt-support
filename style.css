@@ -303,6 +303,28 @@ h4 { margin: 16px 0 6px; font-size: 16px; }
 .maskwrap canvas { max-width: 100%; max-height: 68vh; touch-action: none; border-radius: 6px; background: #000; }
 .maskbtns { justify-content: center; }
 
+/* 脳卒中フォーマット */
+.subbox { border: 1px solid var(--line); border-radius: 14px; padding: 4px 12px 12px; margin-top: 8px; background: #fbfcfe; }
+.dxline { margin-top: 2px; color: var(--blue-dark); }
+.esec { padding: 0; }
+.esec > summary { list-style: none; cursor: pointer; padding: 16px 18px; font-size: 18px; font-weight: 700; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.esec > summary::-webkit-details-marker { display: none; }
+.esec > summary::after { content: "›"; color: #b8c3cf; font-size: 22px; transform: rotate(90deg); transition: transform .15s; }
+.esec:not([open]) > summary::after { transform: rotate(0deg); }
+.esec > summary .small { margin-left: auto; font-weight: 400; }
+.esec > :not(summary) { margin-left: 18px; margin-right: 18px; }
+.esec > :last-child { margin-bottom: 16px; }
+.erow { padding: 6px 0; border-bottom: 1px solid var(--line); }
+.erow .fn { font-size: 15px; font-weight: 600; }
+.erow .chips { gap: 5px; }
+.romhead, .romrow { display: grid; grid-template-columns: 1fr 76px 76px; gap: 8px; align-items: center; }
+.romhead { font-size: 13px; color: var(--sub); text-align: center; margin-top: 6px; }
+.romhead span:first-child { text-align: left; }
+.romrow { padding: 5px 0; border-bottom: 1px solid var(--line); font-size: 15px; }
+.romrow input { padding: 8px; text-align: center; }
+.savebar { position: sticky; bottom: calc(env(safe-area-inset-bottom) + 70px); z-index: 5; margin: 14px 0; }
+.savebar .btn { box-shadow: 0 6px 18px rgba(31, 52, 82, .25); }
+
 /* 月の振り返り */
 .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin: 10px 0; }
 .stat { background: #fff; border-radius: var(--radius); box-shadow: var(--shadow); padding: 12px; display: flex; flex-direction: column; }

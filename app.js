@@ -4,15 +4,21 @@ import * as db from './db.js';
 import { addDays, diffDays, fmt, fmtLong, monthKey, addMonths, weekStart, weekday, isDate, WD } from './dates.js';
 import * as L from './logic.js';
 import * as T from './stage2.js';
+import * as SK from './stroke.js';
 import { dailyMessage, praise, greeting } from './messages.js';
 import { avatarSvg } from './avatar.js';
 import {
   S, actions, changes, today, $, esc, uid, nowIso, byId, setRender, load, saveSettings, savePatient, saveEvent, setFlag, savePlan,
-  saveRecord, toast, cheer, openSheet, closeSheet, copyText, texts, copyBtn, clearTexts, radioChips, recordById,
+  saveRecord, toast, cheer, openSheet, closeSheet, copyText, texts, copyBtn, clearTexts, radioChips, checkChips, recordById,
 } from './core.js';
+changes.formatToggle = (d, el) => {
+  const box = $('#strokeBox');
+  const on = el.querySelector('input[name=format]:checked');
+  if (box) box.hidden = !on || on.value !== 'stroke';
+};
 import { viewPatient, showIcs } from './patient.js';
 
-export const APP_VERSION = '2.0.0';
+export const APP_VERSION = '2.1.0';
 
 const isStandalone = () => navigator.standalone === true || matchMedia('(display-mode: standalone)').matches;
 export const leftText = (p, t) => {
@@ -167,7 +173,8 @@ export function dots(pr) {
 // ---------- 患者の登録・編集 ----------
 function viewPatientForm(id) {
   const p = id ? byId(id) : null;
-  const v = p || { initials: '', room: '', admitDate: today(), kaifukuDate: today(), dischargeDate: '', memo: '', mine: true, homeVisitNeeded: true };
+  const v = p || { initials: '', room: '', admitDate: today(), kaifukuDate: today(), dischargeDate: '', memo: '', mine: true, homeVisitNeeded: true, format: 'stroke' };
+  const st = (p && p.stroke) || {};
   return `<div class="topbar"><a class="back" href="${p ? `#/patient/${p.id}` : '#/today'}">‹ もどる</a></div>
   <h1>${p ? '患者さんを編集' : '患者さんを登録'}</h1>
   <form class="card" data-form="patient" data-id="${p ? p.id : ''}">
@@ -187,6 +194,18 @@ function viewPatientForm(id) {
     <label class="f" for="dischargeDate">退院予定日</label>
     <input type="date" id="dischargeDate" name="dischargeDate" value="${esc(v.dischargeDate)}">
     <div class="hint">変えると、お知らせと期日を自動で計算し直します。</div>
+    <label class="f">評価の型</label>
+    <div data-chg="formatToggle">${radioChips('format', SK.FORMATS, v.format === 'stroke' ? 'stroke' : 'none')}</div>
+    <div id="strokeBox" class="subbox" ${v.format === 'stroke' ? '' : 'hidden'}>
+      <label class="f">診断名</label>${radioChips('dx', SK.DX, st.dx || '')}
+      <label class="f">脳梗塞の種類(脳梗塞のとき)</label>${radioChips('subtype', SK.INFARCT_TYPES, st.subtype || '')}
+      <label class="f" for="onsetDate">発症日</label><input type="date" id="onsetDate" name="onsetDate" value="${esc(st.onsetDate || '')}">
+      <label class="f">損傷側(病巣のある側)</label>${radioChips('side', SK.SIDES, st.side || '')}
+      <div class="hint">右の損傷なら左の麻痺として評価の画面を出します。</div>
+      <label class="f">病巣(いくつでも)</label>${checkChips('lesions', SK.LESIONS, st.lesions || [])}
+      <label class="f">血管の領域(いくつでも)</label>${checkChips('vessels', SK.VESSELS, st.vessels || [])}
+      <label class="f" for="strokeMemo">ボタンにないもの・メモ</label><input type="text" id="strokeMemo" name="strokeMemo" value="${esc(st.memo || '')}" placeholder="例:左前頭葉皮質下の多発梗塞">
+    </div>
     <label class="f" for="memo">メモ</label>
     <textarea id="memo" name="memo" placeholder="名前など個人が分かることは書かないでください">${esc(v.memo)}</textarea>
     <label class="toggle"><input type="checkbox" name="mine" ${v.mine !== false ? 'checked' : ''}> 自分の担当</label>
@@ -369,12 +388,12 @@ function viewHelp(topic) {
 function render() {
   const raw = location.hash.slice(1) || '/today';
   const [path, query] = raw.split('?');
-  const [, route, arg, arg2] = path.split('/');
+  const [, route, arg, arg2, arg3] = path.split('/');
   const views = {
     today: viewToday,
     week: () => viewWeek(Number(arg) || 0),
     patients: viewPatients,
-    patient: () => viewPatient(arg, arg2 || 'main', query),
+    patient: () => viewPatient(arg, arg2 || 'main', query, arg3),
     'patient-new': () => viewPatientForm(null),
     'patient-edit': () => viewPatientForm(arg),
     calendar: () => viewCalendar(arg),
@@ -729,7 +748,19 @@ document.addEventListener('submit', async (ev) => {
     memo: String(fd.get('memo') || '').trim(),
     mine: fd.get('mine') === 'on',
     homeVisitNeeded: fd.get('homeVisitNeeded') === 'on',
+    format: fd.get('format') === 'stroke' ? 'stroke' : '',
   });
+  if (p.format === 'stroke') {
+    p.stroke = {
+      dx: fd.get('dx') || '',
+      subtype: fd.get('dx') === '脳梗塞' ? fd.get('subtype') || '' : '',
+      onsetDate: fd.get('onsetDate') || '',
+      side: fd.get('side') || '',
+      lesions: fd.getAll('lesions'),
+      vessels: fd.getAll('vessels'),
+      memo: String(fd.get('strokeMemo') || '').trim(),
+    };
+  }
   if (old && p.dischargeDate !== old.dischargeDate) {
     p.dischargeHistory = [...(old.dischargeHistory || []), { from: old.dischargeDate, to: p.dischargeDate, at: nowIso() }];
   }

@@ -1,6 +1,7 @@
 // 第2段階の計算と文づくり(画面とは切り離した部品。テストあり)
 import { diffDays, addDays, fmt, isDate, monthKey, endOfMonth } from './dates.js';
 import { ADL_ITEMS, label, visitDate, EVENT_TYPES } from './logic.js';
+import { strokeSummary } from './stroke.js';
 
 export const GENDERS = { m: '男性', f: '女性' };
 export const AGES = [['u50', '50代以下'], ['60', '60代'], ['70', '70代'], ['80', '80代'], ['90', '90代以上']];
@@ -139,6 +140,7 @@ export function summaryDraft(p, state, today) {
   if (n.sinceAdmit != null && isDate(p.dischargeDate)) L.push(`・在院日数:約${diffDays(p.dischargeDate, p.admitDate)}日`);
   if (p.diseaseLimit) L.push(`・疾患区分:${p.diseaseLimit}日${n.limitDate ? `(上限 ${fmt(n.limitDate)})` : ''}`);
   L.push('', '■入院前の状態', (p.preState || '').trim() || '(未入力)');
+  L.push(...strokeSummary(p, recs));
   L.push('', '■FIM');
   if (fim) {
     L.push(`・${FIM_TIMINGS[fim.first.timing] || ''}${fmt(fim.first.date)}:${fim.firstTotal.total}点(運動${fim.firstTotal.motor}/認知${fim.firstTotal.cog})`);

@@ -135,6 +135,19 @@ export function chips(list, current, attrs, { multi = false } = {}) {
     })
     .join('')}</div>`;
 }
+// フォームの中で使う複数選択ボタン(チェックボックス)
+export function checkChips(name, list, current = []) {
+  return `<div class="chips">${list.map((v) => `<label class="chip-r"><input type="checkbox" name="${name}" value="${esc(v)}" ${(current || []).includes(v) ? 'checked' : ''}><span>${esc(v)}</span></label>`).join('')}</div>`;
+}
+// フォームの中で使う選択ボタン(ラジオボタン)。normal を渡すと「全部 正常」で選ばれる印が付く
+export function radioChipsN(name, list, current, normal) {
+  return `<div class="chips">${list
+    .map((item) => {
+      const [v, n] = Array.isArray(item) ? item : [item, item];
+      return `<label class="chip-r"><input type="radio" name="${esc(name)}" value="${esc(v)}" ${String(current) === String(v) ? 'checked' : ''} ${normal != null && String(normal) === String(v) ? 'data-normal="1"' : ''}><span>${esc(n)}</span></label>`;
+    })
+    .join('')}</div>`;
+}
 // フォームの中で使う選択ボタン(ラジオボタン)
 export function radioChips(name, list, current) {
   return `<div class="chips">${list
