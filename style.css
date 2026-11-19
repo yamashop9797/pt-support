@@ -322,6 +322,18 @@ h4 { margin: 16px 0 6px; font-size: 16px; }
 .romhead span:first-child { text-align: left; }
 .romrow { padding: 5px 0; border-bottom: 1px solid var(--line); font-size: 15px; }
 .romrow input { padding: 8px; text-align: center; }
+.dxwarn { margin-top: 2px; color: var(--red, #d33); font-weight: 700; }
+/* 脊損の感覚表 */
+.sgrid { display: grid; grid-template-columns: 44px repeat(4, minmax(0, 1fr)) 34px; gap: 4px; align-items: center; padding: 2px 0; }
+.sghead { font-size: 12px; color: var(--sub); text-align: center; position: sticky; top: 0; background: #fff; z-index: 2; padding: 6px 0; }
+.sgrid .lv { font-size: 14px; font-weight: 700; }
+.sc { border: 1px solid var(--line); border-radius: 8px; background: #fff; font-size: 16px; font-weight: 700; min-height: 36px; padding: 0; color: var(--text, #1d2530); }
+.sc.s2 { background: #e9f6ee; color: #1f7a45; }
+.sc.s1 { background: #fff5d6; color: #8a6200; }
+.sc.s0 { background: #fde6e6; color: #b42323; }
+.sc.snt { background: #eef0f3; color: #6b7684; font-size: 12px; }
+.sc.se { border-style: dashed; color: #b8c3cf; }
+.sc.down { background: #f2f6fb; color: var(--blue-dark); }
 .savebar { position: sticky; bottom: calc(env(safe-area-inset-bottom) + 70px); z-index: 5; margin: 14px 0; }
 .savebar .btn { box-shadow: 0 6px 18px rgba(31, 52, 82, .25); }
 

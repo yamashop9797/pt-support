@@ -5,6 +5,8 @@ import { addDays, diffDays, fmt, fmtLong, monthKey, addMonths, weekStart, weekda
 import * as L from './logic.js';
 import * as T from './stage2.js';
 import * as SK from './stroke.js';
+import * as OR from './ortho.js';
+import * as SC from './sci.js';
 import { dailyMessage, praise, greeting } from './messages.js';
 import { avatarSvg } from './avatar.js';
 import {
@@ -12,13 +14,15 @@ import {
   saveRecord, toast, cheer, openSheet, closeSheet, copyText, texts, copyBtn, clearTexts, radioChips, checkChips, recordById,
 } from './core.js';
 changes.formatToggle = (d, el) => {
-  const box = $('#strokeBox');
   const on = el.querySelector('input[name=format]:checked');
-  if (box) box.hidden = !on || on.value !== 'stroke';
+  for (const k of ['stroke', 'ortho', 'sci']) {
+    const box = $(`#${k}Box`);
+    if (box) box.hidden = !on || on.value !== k;
+  }
 };
 import { viewPatient, showIcs } from './patient.js';
 
-export const APP_VERSION = '2.1.0';
+export const APP_VERSION = '2.2.0';
 
 const isStandalone = () => navigator.standalone === true || matchMedia('(display-mode: standalone)').matches;
 export const leftText = (p, t) => {
@@ -175,6 +179,8 @@ function viewPatientForm(id) {
   const p = id ? byId(id) : null;
   const v = p || { initials: '', room: '', admitDate: today(), kaifukuDate: today(), dischargeDate: '', memo: '', mine: true, homeVisitNeeded: true, format: 'stroke' };
   const st = (p && p.stroke) || {};
+  const ot = (p && p.ortho) || {};
+  const sc = (p && p.sci) || {};
   return `<div class="topbar"><a class="back" href="${p ? `#/patient/${p.id}` : '#/today'}">‹ もどる</a></div>
   <h1>${p ? '患者さんを編集' : '患者さんを登録'}</h1>
   <form class="card" data-form="patient" data-id="${p ? p.id : ''}">
@@ -195,7 +201,7 @@ function viewPatientForm(id) {
     <input type="date" id="dischargeDate" name="dischargeDate" value="${esc(v.dischargeDate)}">
     <div class="hint">変えると、お知らせと期日を自動で計算し直します。</div>
     <label class="f">評価の型</label>
-    <div data-chg="formatToggle">${radioChips('format', SK.FORMATS, v.format === 'stroke' ? 'stroke' : 'none')}</div>
+    <div data-chg="formatToggle">${radioChips('format', SK.FORMATS, ['stroke', 'ortho', 'sci'].includes(v.format) ? v.format : 'none')}</div>
     <div id="strokeBox" class="subbox" ${v.format === 'stroke' ? '' : 'hidden'}>
       <label class="f">診断名</label>${radioChips('dx', SK.DX, st.dx || '')}
       <label class="f">脳梗塞の種類(脳梗塞のとき)</label>${radioChips('subtype', SK.INFARCT_TYPES, st.subtype || '')}
@@ -205,6 +211,28 @@ function viewPatientForm(id) {
       <label class="f">病巣(いくつでも)</label>${checkChips('lesions', SK.LESIONS, st.lesions || [])}
       <label class="f">血管の領域(いくつでも)</label>${checkChips('vessels', SK.VESSELS, st.vessels || [])}
       <label class="f" for="strokeMemo">ボタンにないもの・メモ</label><input type="text" id="strokeMemo" name="strokeMemo" value="${esc(st.memo || '')}" placeholder="例:左前頭葉皮質下の多発梗塞">
+    </div>
+    <div id="orthoBox" class="subbox" ${v.format === 'ortho' ? '' : 'hidden'}>
+      <label class="f">疾患</label>${radioChips('oDx', OR.ORTHO_DX, ot.dx || '')}
+      <label class="f">手術・治療</label>${radioChips('oSurgery', OR.SURGERY, ot.surgery || '')}
+      <label class="f">患側</label>${radioChips('oSide', OR.O_SIDES, ot.side || '')}
+      <label class="f" for="opDate">手術日</label><input type="date" id="opDate" name="opDate" value="${esc(ot.opDate || '')}">
+      <div class="hint">入れると「術後◯日」が出ます。</div>
+      <label class="f">荷重(登録のとき)</label>${radioChips('oWb', OR.WB, ot.wb || '')}
+      <label class="f" for="wbDate">この荷重の開始日</label><input type="date" id="wbDate" name="wbDate" value="${esc(ot.wbDate || '')}">
+      <div class="hint">荷重が変わったら、評価の画面の「今の荷重」で変えられます。</div>
+      <label class="f">禁止の動き(いくつでも)</label>${checkChips('precautions', OR.PRECAUTIONS, ot.precautions || [])}
+      <input type="text" name="precMemo" value="${esc(ot.precMemo || '')}" placeholder="ほかの禁止・注意(例:後方アプローチ)">
+      <label class="f" for="orthoMemo">ボタンにないもの・メモ</label><input type="text" id="orthoMemo" name="orthoMemo" value="${esc(ot.memo || '')}" placeholder="例:γネイル">
+    </div>
+    <div id="sciBox" class="subbox" ${v.format === 'sci' ? '' : 'hidden'}>
+      <label class="f">損傷の高さ(神経学的レベル)</label>${radioChips('sLevel', SC.LEVELS, sc.level || '')}
+      <div class="hint">T6より上なら「自律神経過反射に注意」を出します。評価を入れると、その結果の高さを使います。</div>
+      <label class="f">AIS(登録のとき)</label>${radioChips('sAis', SC.AIS.map(([k]) => k), sc.ais || '')}
+      <label class="f">原因</label>${radioChips('sCause', SC.CAUSES, sc.cause || '')}
+      <label class="f" for="injuryDate">受傷日・発症日</label><input type="date" id="injuryDate" name="injuryDate" value="${esc(sc.injuryDate || '')}">
+      <label class="f" for="sSurgery">手術(なければ空)</label><input type="text" id="sSurgery" name="sSurgery" value="${esc(sc.surgery || '')}" placeholder="例:C3-6 椎弓形成術">
+      <label class="f" for="sciMemo">メモ</label><input type="text" id="sciMemo" name="sciMemo" value="${esc(sc.memo || '')}" placeholder="例:中心性頸髄損傷">
     </div>
     <label class="f" for="memo">メモ</label>
     <textarea id="memo" name="memo" placeholder="名前など個人が分かることは書かないでください">${esc(v.memo)}</textarea>
@@ -748,8 +776,31 @@ document.addEventListener('submit', async (ev) => {
     memo: String(fd.get('memo') || '').trim(),
     mine: fd.get('mine') === 'on',
     homeVisitNeeded: fd.get('homeVisitNeeded') === 'on',
-    format: fd.get('format') === 'stroke' ? 'stroke' : '',
+    format: ['stroke', 'ortho', 'sci'].includes(fd.get('format')) ? fd.get('format') : '',
   });
+  if (p.format === 'ortho') {
+    p.ortho = {
+      dx: fd.get('oDx') || '',
+      surgery: fd.get('oSurgery') || '',
+      side: fd.get('oSide') || '',
+      opDate: fd.get('opDate') || '',
+      wb: fd.get('oWb') || '',
+      wbDate: fd.get('wbDate') || '',
+      precautions: fd.getAll('precautions'),
+      precMemo: String(fd.get('precMemo') || '').trim(),
+      memo: String(fd.get('orthoMemo') || '').trim(),
+    };
+  }
+  if (p.format === 'sci') {
+    p.sci = {
+      level: fd.get('sLevel') || '',
+      ais: fd.get('sAis') || '',
+      cause: fd.get('sCause') || '',
+      injuryDate: fd.get('injuryDate') || '',
+      surgery: String(fd.get('sSurgery') || '').trim(),
+      memo: String(fd.get('sciMemo') || '').trim(),
+    };
+  }
   if (p.format === 'stroke') {
     p.stroke = {
       dx: fd.get('dx') || '',

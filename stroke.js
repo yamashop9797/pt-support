@@ -1,7 +1,7 @@
 // 脳卒中フォーマット:項目の一覧と、文にする部品(画面とは切り離した部品。テストあり)
 import { diffDays, fmt, isDate } from './dates.js';
 
-export const FORMATS = [['stroke', '脳卒中'], ['none', 'なし(あとで)']];
+export const FORMATS = [['stroke', '脳卒中'], ['ortho', '整形'], ['sci', '脊損'], ['none', 'なし(あとで)']];
 export const DX = ['脳梗塞', '脳出血', 'くも膜下出血', 'その他'];
 export const INFARCT_TYPES = ['アテローム血栓性', '心原性', 'ラクナ', 'その他'];
 export const SIDES = ['右', '左', '両側'];

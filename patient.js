@@ -10,8 +10,7 @@ import {
   getPath, setPath, toast, cheer, openSheet, closeSheet, copyText, copyBtn, chips, radioChips,
 } from './core.js';
 import { leftText, dots, checkAct, shareFile, downloadFile } from './app.js';
-import * as SK from './stroke.js';
-import { strokeCard, viewStrokeEval } from './strokeui.js';
+import { formatCard, viewEval, formatHeader } from './formsui.js';
 
 const SECTIONS = [['main', '概要'], ['rec', '記録'], ['life', '生活'], ['docs', '書類']];
 const statusTag = { none: '<span class="tag">未登録</span>', plan: '<span class="tag plan">予定</span>', done: '<span class="tag ok">済</span>' };
@@ -19,14 +18,14 @@ const statusTag = { none: '<span class="tag">未登録</span>', plan: '<span cla
 export function viewPatient(id, section = 'main', query, extra) {
   const p = byId(id);
   if (!p) return `<a class="back" href="#/patients">‹ 患者</a><div class="empty">見つかりませんでした</div>`;
-  if (section === 'eval') return viewStrokeEval(p, extra, query);
+  if (section === 'eval') return viewEval(p, extra, query);
   if (!SECTIONS.some(([k]) => k === section)) section = 'main';
   const t = today();
   const lt = leftText(p, t);
   let h = `<div class="topbar"><a class="back" href="${p.archived ? '#/archive' : '#/today'}">‹ ${p.archived ? '退院済み' : 'ホーム'}</a><a class="btn" href="#/patient-edit/${p.id}">編集</a></div>
     <div class="phead">${avatarSvg(p.gender, p.ageGroup, 76)}<div><div class="row"><span class="ini">${esc(L.label(p))}</span><span class="room">${esc(p.room || '')}</span>${p.archived ? '<span class="tag">退院済み</span>' : ''}</div>
     <div class="sub">${[T.GENDERS[p.gender], (T.AGES.find((a) => a[0] === p.ageGroup) || [])[1], p.diseaseLimit ? `区分${p.diseaseLimit}日` : ''].filter(Boolean).join('・') || '性別・年代は「編集」で入れられます'}</div>
-    ${p.format === 'stroke' ? `<div class="small dxline">${esc(SK.diagnosisText(p) || '脳卒中(診断名は「編集」で)')}${SK.onsetDays(p, t) != null ? ` ・発症から${SK.onsetDays(p, t)}日` : ''}</div>` : ''}</div></div>
+    ${formatHeader(p, t)}</div></div>
     ${bigNumbers(p, t)}
     <div class="seg sticky">${SECTIONS.map(([k, n]) => `<a class="${k === section ? 'on' : ''}" href="#/patient/${p.id}/${k}">${n}</a>`).join('')}</div>`;
   if (section === 'main') h += sectionMain(p, t, lt);
@@ -117,7 +116,7 @@ function sectionRecords(p, t) {
   const fims = recordsOf(p.id, 'fim');
   const ibs = recordsOf(p.id, 'inbody');
   const fs = T.fimSummary(S.records.filter((r) => r.patientId === p.id));
-  let h = strokeCard(p) + `<div class="card"><div class="topbar"><h3 style="margin:0">毎日の記録</h3><button class="btn primary" data-act="dailyNew" data-pid="${p.id}">+ 今日の記録</button></div>
+  let h = formatCard(p) +`<div class="card"><div class="topbar"><h3 style="margin:0">毎日の記録</h3><button class="btn primary" data-act="dailyNew" data-pid="${p.id}">+ 今日の記録</button></div>
     ${daily.length ? daily.slice(0, 20).map((r) => `<div class="list-row"><a href="#" data-act="dailyEdit" data-id="${r.id}"><b>${fmt(r.date)}</b> <span class="mood m${T.MOODS.indexOf(r.mood)}">${esc(r.mood || '')}</span> <span class="sub">${esc((r.tags || []).join('・'))}</span>${r.memo ? `<div class="small">${esc(r.memo)}</div>` : ''}</a><span class="chev">›</span></div>`).join('')
       : '<div class="sub">まだありません。ボタンで選ぶだけで残せます。</div>'}
     ${daily.length > 20 ? `<div class="small">ほか${daily.length - 20}件</div>` : ''}</div>`;
