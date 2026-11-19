@@ -1,11 +1,15 @@
 // オフラインでも動くように、アプリのファイルをiPhoneにしまっておく係
 // ファイルを直したら VERSION の数字を上げる(新しいものに入れかわる)
-const VERSION = 'v1.0.1';
+const VERSION = 'v2.0.0';
 const FILES = [
   './',
   './index.html',
   './style.css',
   './app.js',
+  './core.js',
+  './patient.js',
+  './stage2.js',
+  './avatar.js',
   './db.js',
   './dates.js',
   './logic.js',

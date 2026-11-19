@@ -17,7 +17,7 @@ function mkState(over = {}) {
 }
 const P = (o) => ({ id: 'p1', initials: 'A', room: '221', admitDate: '2026-10-01', dischargeDate: '', mine: true, archived: false, homeVisitNeeded: true, adl: {}, ...o });
 // 計画書のお知らせ(月の初めから選ぶまで毎日出る)は別のテストで見るので、ここでは除く
-const kinds = (st, t) => L.computeNotices(st, t).map((n) => n.kind).filter((k) => k !== 'planSelect');
+const kinds = (st, t) => L.computeNotices(st, t).map((n) => n.kind).filter((k) => k !== 'planSelect' && k !== 'review');
 
 test('休みなら前の出勤日にずらす', () => {
   const h = new Set(['2026-11-20', '2026-11-19']);

@@ -288,6 +288,16 @@ export function computeNotices(state, today) {
     }
   }
 
+  // 月の振り返り(毎月1〜7日、先月分)
+  if (pats.length && Number(today.slice(8)) <= 7) {
+    const prev = addMonths(monthKey(today), -1);
+    if (!flags.has(`review:${prev}`)) {
+      out.push({ key: `review:${prev}`, kind: 'review', month: prev,
+        title: `${Number(prev.slice(5))}月の振り返りを見てみましょう`, body: '先月のがんばりをまとめました',
+        due: null, level: 'green' });
+    }
+  }
+
   // バックアップ(月1回)
   const base = settings.lastBackupAt || settings.firstUseAt;
   if (base && diffDays(today, base.slice(0, 10)) >= 30 && state.patients.length) {
@@ -296,7 +306,7 @@ export function computeNotices(state, today) {
       due: today, level: 'yellow' });
   }
 
-  out.sort((a, b) => (b.big ? 1 : 0) - (a.big ? 1 : 0) || (a.due || '').localeCompare(b.due || '') || a.key.localeCompare(b.key));
+  out.sort((a, b) => (b.big ? 1 : 0) - (a.big ? 1 : 0) || (a.due || '9999').localeCompare(b.due || '9999') || a.key.localeCompare(b.key));
   return out;
 }
 

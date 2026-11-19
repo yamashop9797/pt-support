@@ -1,98 +1,21 @@
-// 画面と操作(データの計算は logic.js、保存は db.js)
+// 画面の切り替え・ホーム・今週・患者一覧・カレンダー・設定・ロック
+// (患者ページと第2段階の記録・書類は patient.js)
 import * as db from './db.js';
-import { todayStr, addDays, diffDays, fmt, fmtLong, monthKey, addMonths, weekStart, weekday, isDate, WD, parse } from './dates.js';
+import { addDays, diffDays, fmt, fmtLong, monthKey, addMonths, weekStart, weekday, isDate, WD } from './dates.js';
 import * as L from './logic.js';
+import * as T from './stage2.js';
 import { dailyMessage, praise, greeting } from './messages.js';
+import { avatarSvg } from './avatar.js';
+import {
+  S, actions, changes, today, $, esc, uid, nowIso, byId, setRender, load, saveSettings, savePatient, saveEvent, setFlag, savePlan,
+  saveRecord, toast, cheer, openSheet, closeSheet, copyText, texts, copyBtn, clearTexts, radioChips, recordById,
+} from './core.js';
+import { viewPatient, showIcs } from './patient.js';
 
-export const APP_VERSION = '1.0.0';
+export const APP_VERSION = '2.0.0';
 
-// ---------- 状態 ----------
-const S = {
-  settings: null, patients: [], events: [], holidays: new Set(), flags: new Set(), plans: {},
-  ui: { mineOnly: true, sortBy: 'discharge' },
-};
-// 動作確認用:URLに ?today=2026-12-01 を付けると「今日」をずらせる
-const fakeToday = new URLSearchParams(location.search).get('today');
-const today = () => (fakeToday && isDate(fakeToday) ? fakeToday : todayStr());
-
-const $ = (sel, root = document) => root.querySelector(sel);
-const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
-const nowIso = () => new Date().toISOString();
-const byId = (id) => S.patients.find((p) => p.id === id);
-const texts = {}; // コピー用の文
-
-async function load() {
-  const saved = (await db.get('kv', 'settings')) || {};
-  const def = L.defaultSettings();
-  S.settings = { ...def, ...saved, adlTable: saved.adlTable || def.adlTable, visitChecklist: saved.visitChecklist || def.visitChecklist };
-  S.patients = await db.getAll('patients');
-  S.events = await db.getAll('events');
-  S.holidays = new Set((await db.getAll('holidays')).map((h) => h.date));
-  S.flags = new Set((await db.getAll('flags')).map((f) => f.key));
-  S.plans = Object.fromEntries((await db.getAll('plans')).map((p) => [p.month, p]));
-}
-const saveSettings = () => db.put('kv', S.settings);
-async function savePatient(p) {
-  p.updatedAt = nowIso();
-  await db.put('patients', p);
-  const i = S.patients.findIndex((x) => x.id === p.id);
-  if (i >= 0) S.patients[i] = p; else S.patients.push(p);
-}
-async function saveEvent(e) {
-  await db.put('events', e);
-  const i = S.events.findIndex((x) => x.id === e.id);
-  if (i >= 0) S.events[i] = e; else S.events.push(e);
-}
-async function setFlag(key) {
-  S.flags.add(key);
-  await db.put('flags', { key, at: nowIso() });
-}
-async function savePlan(pl) {
-  S.plans[pl.month] = pl;
-  await db.put('plans', pl);
-}
-
-// ---------- 小さな部品 ----------
-let toastTimer;
-function toast(msg, ms = 2600) {
-  const t = $('#toast');
-  t.textContent = msg;
-  t.hidden = false;
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => (t.hidden = true), ms);
-}
-const cheer = () => toast(praise());
-
-function openSheet(title, html) {
-  const w = $('#sheet');
-  w.innerHTML = `<div class="sheet" role="dialog"><div class="sheet-head"><h3>${esc(title)}</h3><button class="x" data-act="closeSheet" aria-label="閉じる">✕</button></div>${html}</div>`;
-  w.hidden = false;
-}
-function closeSheet() {
-  $('#sheet').hidden = true;
-  $('#sheet').innerHTML = '';
-}
-async function copyText(text) {
-  try {
-    await navigator.clipboard.writeText(text);
-  } catch {
-    const ta = document.createElement('textarea');
-    ta.value = text;
-    document.body.appendChild(ta);
-    ta.select();
-    document.execCommand('copy');
-    ta.remove();
-  }
-  toast('コピーしました');
-}
-function copyBtn(text, labelText = 'コピー') {
-  const k = 'c' + Object.keys(texts).length;
-  texts[k] = text;
-  return `<button class="btn" data-act="copy" data-k="${k}">${labelText}</button>`;
-}
 const isStandalone = () => navigator.standalone === true || matchMedia('(display-mode: standalone)').matches;
-const leftText = (p, t) => {
+export const leftText = (p, t) => {
   if (!isDate(p.dischargeDate)) return { text: '退院予定日 未入力', lv: 'green' };
   const n = diffDays(p.dischargeDate, t);
   if (n > 0) return { text: `退院まであと${n}日`, lv: n <= 7 ? 'red' : n <= 30 ? 'yellow' : 'green' };
@@ -106,7 +29,13 @@ function dueLabel(n, t) {
   return `<span class="n-due">${txt}</span>`;
 }
 
-// ---------- 画面:今日 ----------
+// ---------- ホーム(患者のタブ+今日やること) ----------
+function patientTabs() {
+  const list = L.activePatients(S).sort((a, b) => (a.dischargeDate || '9999').localeCompare(b.dischargeDate || '9999'));
+  return `<div class="ptabs">${list
+    .map((p) => `<a class="ptab" href="#/patient/${p.id}">${avatarSvg(p.gender, p.ageGroup, 58)}<span>${esc(L.label(p))}</span></a>`)
+    .join('')}<a class="ptab add" href="#/patient-new"><span class="plus">+</span><span>追加</span></a></div>`;
+}
 function viewToday() {
   const t = today();
   const notices = L.computeNotices(S, t);
@@ -116,35 +45,34 @@ function viewToday() {
     .map((p) => ({ p, list: L.newPatientChecklist(p, S.events) }))
     .filter((x) => x.list.some((c) => !c.done));
   const name = S.settings.name ? `${esc(S.settings.name)}さん、` : '';
-  let h = `<div class="hello">${name}${greeting()}</div><h1>今日やること</h1><div class="sub">${fmtLong(t)}${S.holidays.has(t) ? ' <span class="tag holiday-tag">お休み</span>' : ''}</div>
-  <div class="card word">${esc(dailyMessage(t))}</div>`;
-
+  let h = `<div class="hello">${name}${greeting()}</div>${patientTabs()}
+    <h1>今日やること</h1><div class="sub">${fmtLong(t)}${S.holidays.has(t) ? ' <span class="tag holiday-tag">お休み</span>' : ''}</div>
+    <div class="word-line">${esc(dailyMessage(t))}</div>`;
   if (!S.patients.filter((p) => !p.archived).length) {
-    h += `<div class="card"><h3>はじめに</h3><p>担当の患者さんを登録すると、期日やお知らせを自動で出します。</p>
-      <div class="btns"><a class="btn primary" href="#/patient-new">患者さんを登録する</a></div></div>`;
+    h += `<div class="card"><h3>はじめに</h3><p>上の「+ 追加」から担当の患者さんを登録すると、期日やお知らせを自動で出します。</p></div>`;
   }
-  for (const n of big) h += bigCard(n, t);
+  for (const n of big) h += bigCard(n);
   for (const { p, list } of fresh) {
-    h += `<div class="card"><div class="n-title">新しく担当:${esc(L.label(p))}${p.room ? ` <span class="sub">${esc(p.room)}</span>` : ''}</div>
-      <div class="sub">終わるまでここに出ます</div>${checklistRows(p, list)}</div>`;
+    const left = list.filter((c) => !c.done);
+    h += `<div class="card notice lv-yellow"><div class="n-title">${esc(L.label(p))} 入院時のこと(あと${left.length}つ)</div>
+      ${left.map((c) => `<div class="check" ${checkAct(p, c.key)}><span class="box"></span><span class="ctext">${esc(c.label)}</span><span class="chev">›</span></div>`).join('')}</div>`;
   }
   for (const n of rest) h += noticeCard(n, t);
   if (!notices.length && !fresh.length && S.patients.length) h += `<div class="empty">今日やることはありません。<br>いい一日を過ごしてください。</div>`;
   return h;
 }
-function checklistRows(p, list) {
-  return list
-    .map((c) => {
-      const act = c.key === 'firstConf' ? `data-act="addEvent" data-pid="${p.id}" data-type="firstConf"`
-        : c.key === 'preState' ? `data-act="editPreState" data-pid="${p.id}"`
-        : `data-act="toggleAdmit" data-pid="${p.id}" data-key="${c.key}"`;
-      return `<div class="check ${c.done ? 'done' : ''}" ${c.done && c.key !== 'inbodyAdmit' && c.key !== 'fimAdmit' ? '' : act}><span class="box"></span><span class="ctext">${esc(c.label)}</span>${c.done ? '' : '<span class="chev">›</span>'}</div>`;
-    })
-    .join('');
+export function checkAct(p, key) {
+  switch (key) {
+    case 'firstConf': return `data-act="addEvent" data-pid="${p.id}" data-type="firstConf"`;
+    case 'preState': return `data-act="editPreState" data-pid="${p.id}"`;
+    case 'inbodyAdmit': return `data-act="inbodyNew" data-pid="${p.id}" data-timing="admit"`;
+    case 'fimAdmit': return `data-act="fimNew" data-pid="${p.id}" data-timing="admit"`;
+  }
+  return '';
 }
-function bigCard(n, t) {
+function bigCard(n) {
   return `<div class="big-card s${n.strength}"><div class="n-title">${esc(n.title)}</div><div class="n-body">${esc(n.body)}</div>
-    <div class="btns"><button class="btn" data-act="summaryDone" data-pid="${n.pid}">サマリーができた</button><a class="btn" href="#/patient/${n.pid}">患者ページ</a></div></div>`;
+    <div class="btns"><a class="btn" href="#/patient/${n.pid}/docs">下書きを作る</a><button class="btn" data-act="summaryDone" data-pid="${n.pid}">サマリーができた</button></div></div>`;
 }
 function noticeCard(n, t) {
   let extra = '';
@@ -160,7 +88,7 @@ function noticeCard(n, t) {
       btns = `<button class="btn primary" data-act="addEvent" data-pid="${n.pid}" data-type="homeVisit">訪問日を入れる</button>`;
       break;
     case 'visitReport':
-      btns = `<button class="btn primary" data-act="reportDone" data-pid="${n.pid}">報告書ができた</button>`;
+      btns = `<a class="btn primary" href="#/patient/${n.pid}/docs">報告書を作る</a><button class="btn" data-act="reportDone" data-pid="${n.pid}">報告書ができた</button>`;
       break;
     case 'adl':
       btns = `${copyBtn(n.draft, '下書きをコピー')}<a class="btn" href="#/patient/${n.pid}?adl">ADLを更新</a><button class="btn" data-act="flag" data-key="${n.key}">済み</button>`;
@@ -174,15 +102,18 @@ function noticeCard(n, t) {
     case 'planExplain':
       btns = `<button class="btn primary" data-act="planExplained" data-month="${n.month}" data-pid="${n.pid}">説明済み</button>`;
       break;
+    case 'review':
+      btns = `<a class="btn primary" href="#/review/${n.month}">振り返りを見る</a><button class="btn" data-act="flag" data-key="${n.key}">閉じる</button>`;
+      break;
     case 'backup':
       btns = `<button class="btn primary" data-act="backup">今すぐバックアップ</button>`;
       break;
   }
-  if (n.pid && n.kind !== 'adl' && n.kind !== 'event') btns += `<a class="btn" href="#/patient/${n.pid}">患者ページ</a>`;
+  if (n.pid && !['adl', 'event', 'visitReport'].includes(n.kind)) btns += `<a class="btn" href="#/patient/${n.pid}">患者ページ</a>`;
   return `<div class="card notice lv-${n.level}"><div class="n-title">${esc(n.title)}</div>${n.body ? `<div class="n-body">${esc(n.body)}</div>` : ''}${dueLabel(n, t)}${extra}<div class="btns">${btns}</div></div>`;
 }
 
-// ---------- 画面:今週 ----------
+// ---------- 今週 ----------
 function viewWeek(offset) {
   const t = today();
   const start = addDays(weekStart(t), 7 * offset);
@@ -202,11 +133,11 @@ function viewWeek(offset) {
     h += `</div>`;
   }
   h += `<div class="card"><h3>iPhoneのカレンダーに入れる</h3><p class="sub">担当の人全員の期日・予定と、毎月の計画書のお知らせをまとめて入れます(通知つき)。</p>
-    <div class="btns"><button class="btn primary" data-act="icsAll">まとめてカレンダーへ</button></div></div>`;
+    <div class="btns"><button class="btn primary" data-act="icsAll">まとめてカレンダーへ</button><a class="btn" href="#/review/${addMonths(monthKey(t), -1)}">先月の振り返り</a></div></div>`;
   return h;
 }
 
-// ---------- 画面:患者一覧 ----------
+// ---------- 患者一覧 ----------
 function viewPatients() {
   const t = today();
   let list = S.patients.filter((p) => !p.archived);
@@ -222,107 +153,37 @@ function viewPatients() {
   if (!list.length) h += `<div class="empty">まだ登録されていません。<br>右上の「+ 追加」から登録できます。</div>`;
   for (const p of list) {
     const lt = leftText(p, t);
-    const pr = L.progress(p, S, t);
-    h += `<a class="card pcard" href="#/patient/${p.id}"><div class="row"><span class="ini">${esc(L.label(p))}</span><span class="room">${esc(p.room || '')}</span>${p.mine === false ? '<span class="tag">担当外</span>' : ''}</div>
-      <div class="left lv-${lt.lv}">${lt.text}</div>${dots(pr)}</a>`;
+    h += `<a class="card pcard" href="#/patient/${p.id}"><div class="prow">${avatarSvg(p.gender, p.ageGroup, 64)}<div><div class="row"><span class="ini">${esc(L.label(p))}</span><span class="room">${esc(p.room || '')}</span>${p.mine === false ? '<span class="tag">担当外</span>' : ''}</div>
+      <div class="left lv-${lt.lv}">${lt.text}</div></div></div>${dots(L.progress(p, S, t))}</a>`;
   }
   h += `<div class="btns"><a class="btn" href="#/archive">退院済みの人</a></div>`;
   return h;
 }
-function dots(pr) {
+export function dots(pr) {
   const one = (k, name) => `<span class="dot ${pr[k]}"><i></i>${name}${pr[k] === 'none' ? (k === 'plan' ? '(今月なし)' : '(なし)') : ''}</span>`;
   return `<div class="dots">${one('plan', '計画書')}${one('homeVisit', '家屋調査')}${one('summary', 'サマリー')}</div>`;
 }
 
-// ---------- 画面:患者ページ ----------
-function viewPatient(id, focus) {
-  const p = byId(id);
-  if (!p) return `<a class="back" href="#/patients">‹ 患者</a><div class="empty">見つかりませんでした</div>`;
-  const t = today();
-  const lt = leftText(p, t);
-  const rem = L.remainingFor(p, S, t);
-  const evs = S.events.filter((e) => e.patientId === p.id).sort((a, b) => (a.date + (a.time || '')).localeCompare(b.date + (b.time || '')));
-  const v = L.visitDate(p, S.events);
-  const ps = L.planState(p, S.plans, t);
-  const a = p.adl || {};
-  const conf = L.adlWeekdays(p.room, S.settings.adlTable);
-
-  let h = `<div class="topbar"><a class="back" href="${p.archived ? '#/archive' : '#/patients'}">‹ ${p.archived ? '退院済み' : '患者'}</a><a class="btn" href="#/patient-edit/${p.id}">編集</a></div>
-    <div class="pcard"><div class="row"><span class="ini">${esc(L.label(p))}</span><span class="room">${esc(p.room || '')}</span>${p.archived ? '<span class="tag">退院済み</span>' : ''}</div>
-    <div class="left lv-${lt.lv}">${lt.text}</div><div class="sub">入院 ${fmt(p.admitDate) || '未入力'} ・ 退院予定 ${fmt(p.dischargeDate) || '未入力'}</div></div>`;
-
-  h += `<div class="card"><h3>残っていること</h3>${
-    rem.length ? rem.map((r) => `<div class="check" ${remAct(p, r)}><span class="box"></span><span class="ctext">${esc(r.label)}</span><span class="chev">›</span></div>`).join('') : '<div class="sub">残っていることはありません。すばらしいです!</div>'
-  }</div>`;
-
-  h += `<div class="card"><h3>入院時のこと</h3>${checklistRows(p, L.newPatientChecklist(p, S.events))}
-    <label class="f" for="preState">入院前の状態</label><textarea id="preState" placeholder="例:独歩・屋外も自立、階段手すりあり">${esc(p.preState || '')}</textarea>
-    <div class="btns"><button class="btn" data-act="savePreState" data-pid="${p.id}">保存</button></div></div>`;
-
-  h += `<div class="card"><h3>進み具合</h3>
-    <div class="list-row"><span>計画書(${Number(t.slice(5, 7))}月)</span><span>${ps === 'done' ? '説明済み' : ps === 'todo' ? `<button class="btn" data-act="planExplained" data-month="${monthKey(t)}" data-pid="${p.id}">説明済みにする</button>` : `<a href="#/plan/${monthKey(t)}">今月は対象外</a>`}</span></div>
-    <div class="list-row"><span>家屋調査</span><span>${
-      p.homeVisitNeeded === false ? `なし <button class="btn" data-act="visitNeeded" data-pid="${p.id}" data-v="1">ありにする</button>`
-      : !v ? `<button class="btn" data-act="addEvent" data-pid="${p.id}" data-type="homeVisit">訪問日を入れる</button>`
-      : p.homeReportDone ? `報告書 済 <button class="btn" data-act="reportUndo" data-pid="${p.id}">戻す</button>`
-      : `${fmt(v)}訪問 <button class="btn" data-act="reportDone" data-pid="${p.id}">報告書ができた</button>`
-    }</span></div>
-    ${p.homeVisitNeeded !== false && !v ? `<div class="small" style="text-align:right"><a href="#" data-act="visitNeeded" data-pid="${p.id}" data-v="0">この人は家屋調査なし</a></div>` : ''}
-    <div class="list-row"><span>サマリー</span><span>${p.summaryDone ? `済(${fmt(p.summaryDone)}) <button class="btn" data-act="summaryUndo" data-pid="${p.id}">戻す</button>` : `<button class="btn" data-act="summaryDone" data-pid="${p.id}">サマリーができた</button>`}</span></div>
-    <div class="small">サマリーは退院7日前から「今日」の画面の一番上に出ます。</div></div>`;
-
-  h += `<div class="card"><div class="topbar"><h3 style="margin:0">予定</h3><button class="btn" data-act="addEvent" data-pid="${p.id}">+ 追加</button></div>${
-    evs.length ? evs.map((e) => `<div class="list-row"><a href="#" data-act="editEvent" data-eid="${e.id}"><b>${fmt(e.date)}</b> ${esc(e.time || '')} ${esc(e.type === 'other' ? e.title || '予定' : L.EVENT_TYPES[e.type])}</a><span class="chev">›</span></div>`).join('') : '<div class="sub">まだありません(初回カンファ・退院前カンファ・家屋訪問など)</div>'
-  }</div>`;
-
-  h += `<div class="card" id="adl"><h3>病棟ADLカンファ用の8項目</h3>
-    <div class="sub">${conf.length ? `この部屋のカンファは毎週 ${conf.map((w) => WD[w]).join('・')}曜日(前日の朝にお知らせ)` : '部屋番号がカンファの表にありません(設定で変えられます)'}</div>
-    ${L.ADL_ITEMS.map(([k, name]) => k === 'dischargeDate'
-      ? `<label class="f">${name}</label><div class="sub">${p.dischargeDate ? fmt(p.dischargeDate) + '(退院予定日から自動)' : '退院予定日を入れると自動で入ります'}</div>`
-      : `<div class="adl-row"><label class="f" for="adl-${k}">${name}</label><input type="text" id="adl-${k}" value="${esc(a[k] || '')}"></div>`).join('')}
-    <div class="hint">${a.updatedAt ? `最後の更新:${fmtLong(a.updatedAt)}` : 'まだ更新していません'}</div>
-    <div class="btns"><button class="btn primary" data-act="saveAdl" data-pid="${p.id}">更新する</button>${copyBtn(L.adlDraft(p, t, null), '下書きをコピー')}</div></div>`;
-
-  if (p.memo) h += `<div class="card"><h3>メモ</h3><div style="white-space:pre-wrap">${esc(p.memo)}</div></div>`;
-
-  h += `<div class="card"><h3>iPhoneのカレンダーに入れる</h3><p class="sub">この人の期日と予定を、通知つきでカレンダーに入れます。予定名はイニシャルだけです。</p>
-    <div class="btns"><button class="btn primary" data-act="icsPatient" data-pid="${p.id}">カレンダーへ</button></div></div>`;
-
-  h += `<div class="btns" style="margin-top:20px">${p.archived
-    ? `<button class="btn" data-act="unarchive" data-pid="${p.id}">担当中に戻す</button>`
-    : `<button class="btn" data-act="archive" data-pid="${p.id}">退院済みにする</button>`}<button class="btn danger" data-act="deletePatient" data-pid="${p.id}">削除</button></div>`;
-
-  if (focus === 'adl') setTimeout(() => $('#adl')?.scrollIntoView({ behavior: 'smooth' }), 50);
-  return h;
-}
-function remAct(p, r) {
-  switch (r.key) {
-    case 'firstConf': return `data-act="addEvent" data-pid="${p.id}" data-type="firstConf"`;
-    case 'visitDate': return `data-act="addEvent" data-pid="${p.id}" data-type="homeVisit"`;
-    case 'preState': return `data-act="editPreState" data-pid="${p.id}"`;
-    case 'inbodyAdmit':
-    case 'fimAdmit': return `data-act="toggleAdmit" data-pid="${p.id}" data-key="${r.key}"`;
-    case 'plan': return `data-act="planExplained" data-month="${monthKey(today())}" data-pid="${p.id}"`;
-    case 'homeReport': return `data-act="reportDone" data-pid="${p.id}"`;
-    case 'summary': return `data-act="summaryDone" data-pid="${p.id}"`;
-  }
-  return '';
-}
-
-// ---------- 画面:患者の登録・編集 ----------
+// ---------- 患者の登録・編集 ----------
 function viewPatientForm(id) {
   const p = id ? byId(id) : null;
-  const v = p || { initials: '', room: '', admitDate: today(), dischargeDate: '', memo: '', mine: true, homeVisitNeeded: true };
-  return `<div class="topbar"><a class="back" href="${p ? `#/patient/${p.id}` : '#/patients'}">‹ もどる</a></div>
+  const v = p || { initials: '', room: '', admitDate: today(), kaifukuDate: today(), dischargeDate: '', memo: '', mine: true, homeVisitNeeded: true };
+  return `<div class="topbar"><a class="back" href="${p ? `#/patient/${p.id}` : '#/today'}">‹ もどる</a></div>
   <h1>${p ? '患者さんを編集' : '患者さんを登録'}</h1>
   <form class="card" data-form="patient" data-id="${p ? p.id : ''}">
     <label class="f" for="initials">イニシャル・あだ名</label>
     <input type="text" id="initials" name="initials" maxlength="8" value="${esc(v.initials)}" placeholder="例:A、K.T" required autocomplete="off">
     <div class="warn-hint">名前は入れないでください(イニシャルやあだ名だけ)</div>
+    <label class="f">性別</label>${radioChips('gender', Object.entries(T.GENDERS), v.gender || '')}
+    <label class="f">年代</label>${radioChips('ageGroup', T.AGES, v.ageGroup || '')}
+    <div class="hint">アバターの見た目が変わります。生年月日は入れません。</div>
     <label class="f" for="room">部屋番号</label>
     <input type="text" id="room" name="room" inputmode="numeric" value="${esc(v.room)}" placeholder="例:221">
     <label class="f" for="admitDate">入院日</label>
     <input type="date" id="admitDate" name="admitDate" value="${esc(v.admitDate)}">
+    <label class="f" for="kaifukuDate">回復期病棟に来た日</label>
+    <input type="date" id="kaifukuDate" name="kaifukuDate" value="${esc(v.kaifukuDate || '')}">
+    <label class="f">疾患の区分(算定上限)</label>${radioChips('diseaseLimit', T.LIMITS.map((n) => [String(n), `${n}日`]), v.diseaseLimit || '')}
     <label class="f" for="dischargeDate">退院予定日</label>
     <input type="date" id="dischargeDate" name="dischargeDate" value="${esc(v.dischargeDate)}">
     <div class="hint">変えると、お知らせと期日を自動で計算し直します。</div>
@@ -334,7 +195,7 @@ function viewPatientForm(id) {
   </form>`;
 }
 
-// ---------- 画面:カレンダー(休みの登録) ----------
+// ---------- カレンダー ----------
 function viewCalendar(mk) {
   const t = today();
   mk = mk || monthKey(t);
@@ -363,7 +224,7 @@ function viewCalendar(mk) {
   return h;
 }
 
-// ---------- 画面:計画書の対象者 ----------
+// ---------- 計画書の対象者 ----------
 function viewPlan(mk) {
   const pl = S.plans[mk] || { month: mk, selected: false, targets: [], explained: [] };
   const list = L.activePatients(S);
@@ -383,7 +244,7 @@ function viewPlan(mk) {
   return h;
 }
 
-// ---------- 画面:退院済み ----------
+// ---------- 退院済み ----------
 function viewArchive() {
   const list = S.patients.filter((p) => p.archived).sort((a, b) => (b.dischargeDate || '').localeCompare(a.dischargeDate || ''));
   let h = `<div class="topbar"><a class="back" href="#/patients">‹ 患者</a></div><h1>退院済みの人</h1><div class="card">`;
@@ -392,17 +253,37 @@ function viewArchive() {
   return h + `</div>`;
 }
 
-// ---------- 画面:設定 ----------
+// ---------- 月の振り返り ----------
+function viewReview(mk) {
+  mk = mk || addMonths(monthKey(today()), -1);
+  const r = T.monthReview({ ...S, today: today() }, mk);
+  const memoRec = recordById(`review:${mk}`);
+  const m = Number(mk.slice(5));
+  const tile = (n, name) => `<div class="stat"><b>${n}</b><span>${name}</span></div>`;
+  const total = r.daily + r.summaries + r.reports + r.plans + r.fim + r.inbody + r.events;
+  return `<div class="topbar"><a class="btn" href="#/review/${addMonths(mk, -1)}">‹</a><b style="font-size:18px">${Number(mk.slice(0, 4))}年${m}月の振り返り</b><a class="btn" href="#/review/${addMonths(mk, 1)}">›</a></div>
+  <div class="card word">${total ? `${m}月もおつかれさまでした。${esc(praise())}` : 'この月の記録はまだありません。'}</div>
+  <div class="stats">${tile(r.active, '担当した人')}${tile(r.newPatients, '新しく担当')}${tile(r.discharged, '退院した人')}${tile(r.events, 'カンファ・訪問など')}</div>
+  <div class="stats">${tile(r.daily, '毎日の記録')}${tile(r.fim, 'FIMの入力')}${tile(r.inbody, 'InBody')}${tile(r.plans, '計画書の説明')}</div>
+  <div class="stats">${tile(r.summaries, 'サマリー完成')}${tile(r.reports, '家屋調査報告書')}${tile(r.avgGain == null ? '—' : (r.avgGain >= 0 ? '+' : '') + r.avgGain, '退院した人のFIM利得(平均)')}</div>
+  ${r.gains.length ? `<div class="card"><h3>退院した人のFIMの変化</h3>${r.gains.map((g) => `<div class="list-row"><span>${esc(L.label(g.p))}</span><b>${g.gain >= 0 ? '+' : ''}${g.gain}点</b></div>`).join('')}</div>` : ''}
+  <div class="card"><h3>ひとことメモ</h3><div class="sub">うまくいったこと、次に試したいことなど</div>
+    <textarea id="reviewMemo" rows="4">${esc(memoRec ? memoRec.memo : '')}</textarea>
+    <div class="btns"><button class="btn primary" data-act="saveReview" data-month="${mk}">保存</button></div></div>`;
+}
+
+// ---------- 設定 ----------
 function viewSettings() {
   const s = S.settings;
   const floors = s.adlTable.floors;
-  let h = `<h1>設定</h1>
+  return `<h1>設定</h1>
   <div class="card"><label class="f" for="setName">呼び名</label><input type="text" id="setName" value="${esc(s.name)}" placeholder="例:ゆう">
-    <div class="hint">「今日」の画面のあいさつに使います。</div>
+    <div class="hint">ホームのあいさつに使います。</div>
     <label class="f" for="setLock">自動でロックするまで(何もしない時間)</label>
     <select id="setLock">${[1, 3, 5, 10, 30].map((m) => `<option value="${m}" ${s.lockMinutes == m ? 'selected' : ''}>${m}分</option>`).join('')}</select>
     <label class="f" for="setTime">カレンダーのお知らせ時刻</label><input type="time" id="setTime" value="${esc(s.notifyTime)}">
-    <div class="hint">iPhoneのカレンダーに入れる予定の通知時刻です。</div>
+    <label class="f" for="setWalk">行き先の‼️:徒歩で何分以上なら目立たせるか</label><input type="number" id="setWalk" min="1" max="120" value="${esc(s.walkLimitMin)}">
+    <div class="hint">本人が退院後に使う移動手段で行けない行き先にも‼️が付きます。</div>
     <div class="btns"><button class="btn primary" data-act="saveBasic">保存</button><button class="btn" data-act="changePin">暗証番号を変える</button></div></div>
 
   <h2>病棟ADLカンファの曜日</h2>
@@ -417,7 +298,7 @@ function viewSettings() {
     <div class="btns"><button class="btn primary" data-act="saveVisitList">保存</button></div></div>
 
   <h2>バックアップ(機種変更のとき)</h2>
-  <div class="card"><div class="sub">データはこのiPhoneの中だけにあります。月に1回、書き出して「ファイル」アプリやiCloudに保存しておくと安心です。</div>
+  <div class="card"><div class="sub">データはこのiPhoneの中だけにあります。月に1回、書き出して「ファイル」アプリやiCloudに保存しておくと安心です。InBodyの写真も一緒に入ります。</div>
     <p>前回のバックアップ:<b>${s.lastBackupAt ? fmtLong(s.lastBackupAt.slice(0, 10)) : 'まだ'}</b></p>
     <div class="btns"><button class="btn primary" data-act="backup">書き出す</button><button class="btn" data-act="restore">読み込む</button></div>
     <input type="file" id="restoreFile" accept=".json,application/json" hidden></div>
@@ -425,12 +306,14 @@ function viewSettings() {
   <h2>iPhoneのカレンダー</h2>
   <div class="card"><div class="btns" style="margin-top:0"><button class="btn" data-act="icsAll">全員の期日・予定を入れる</button><button class="btn" data-act="icsPlans">毎月の計画書のお知らせを入れる</button></div></div>
 
-  <h2>使い方</h2>
+  <h2>使い方・ほか</h2>
   <div class="card">
+    <div class="list-row"><a href="#/review">月の振り返り</a><span class="chev">›</span></div>
     <div class="list-row"><a href="#/help/home">ホーム画面に追加する</a><span class="chev">›</span></div>
     <div class="list-row"><a href="#/help/shortcut">毎朝アプリを開く(ショートカット)</a><span class="chev">›</span></div>
     <div class="list-row"><a href="#/help/ics">カレンダーにうまく入らないとき</a><span class="chev">›</span></div>
     <div class="list-row"><a href="#/help/backup">バックアップと機種変更</a><span class="chev">›</span></div>
+    <div class="list-row"><a href="#/help/ai">「AI用にコピー」の使い方</a><span class="chev">›</span></div>
     <div class="list-row"><a href="#/archive">退院済みの人</a><span class="chev">›</span></div>
   </div>
 
@@ -438,44 +321,46 @@ function viewSettings() {
   <div class="card"><button class="btn" data-act="lockNow">今すぐロック</button>
     <div class="btns"><button class="btn danger" data-act="wipe">すべてのデータを消す</button></div>
     <div class="small" style="margin-top:12px">バージョン ${APP_VERSION}・データはこの端末の中だけに保存され、外には送られません。</div></div>`;
-  return h;
 }
 
-// ---------- 画面:使い方 ----------
+// ---------- 使い方 ----------
 function viewHelp(topic) {
   const back = `<div class="topbar"><a class="back" href="#/settings">‹ 設定</a></div>`;
   const url = location.origin + location.pathname;
   const pages = {
     home: `<h1>ホーム画面に追加</h1><div class="card"><ol class="steps">
       <li>iPhoneの<b>Safari</b>でこのアプリのページを開きます。<br><span class="small">${esc(url)}</span></li>
-      <li>画面の下(または上)の<b>共有ボタン</b>(四角から矢印が出ているマーク)を押します。</li>
-      <li>下にずらして<b>「ホーム画面に追加」</b>を押します。</li>
-      <li>名前はそのまま「PTサポート」で<b>「追加」</b>を押します。</li>
+      <li>共有ボタン(四角から矢印が出ているマーク)を押します。</li>
+      <li>下にずらして<b>「ホーム画面に追加」</b>を押し、<b>「追加」</b>を押します。</li>
       <li>これからは、ホーム画面のアイコンから開いてください。電波がなくても動きます。</li></ol>
       <p class="small">※Safariで開いたときと、ホーム画面から開いたときでは、データの置き場所が別になります。ふだんは<b>ホーム画面のアイコン</b>から使ってください。</p></div>`,
-    shortcut: `<h1>毎朝アプリを開く</h1><div class="card"><p>iPhoneの「ショートカット」アプリで、決まった時間にお知らせを出せます。</p><ol class="steps">
+    shortcut: `<h1>毎朝アプリを開く</h1><div class="card"><ol class="steps">
       <li>「ショートカット」アプリを開き、下の<b>「オートメーション」</b>を押します。</li>
       <li>右上の<b>「+」</b>→<b>「時刻」</b>を選びます。</li>
       <li>時刻(例:7:30)を決め、<b>「毎日」</b>(出勤日だけなら「毎週」で曜日を選ぶ)にします。</li>
       <li><b>「すぐに実行」</b>を選び、「次へ」を押します。</li>
-      <li>アクションの検索で<b>「Appを開く」</b>を選び、「App」のところで<b>「PTサポート」</b>を選びます。</li>
-      <li>「PTサポート」が一覧に出ないときは、代わりに<b>「通知を表示」</b>を選び、文に「PTサポートで今日やることを見ましょう」と入れます。通知が出たら、ホーム画面のアイコンから開いてください。</li>
-      <li>「完了」を押して終わりです。</li></ol>
-      <p class="small">※「URLを開く」はSafariで開いてしまい、ホーム画面のアプリとはデータが別になるので使わないでください。</p></div>`,
-    ics: `<h1>カレンダーにうまく入らないとき</h1><div class="card"><p>ホーム画面のアプリからだと、カレンダーのファイルがうまく開けないことがあります。そのときは次の順で試してください。</p><ol class="steps">
-      <li>カレンダーの画面で<b>「共有・ファイルに保存」</b>を押します。</li>
-      <li>出てきた画面で<b>「"ファイル"に保存」</b>を選び、保存します。</li>
-      <li>「ファイル」アプリを開き、保存したファイル(PTサポート〜.ics)を押します。</li>
-      <li><b>「すべてを追加」</b>(または「カレンダーに追加」)を押します。</li>
-      <li>それでもだめなときは<b>「一覧をコピー」</b>を押し、メモなどに貼って、カレンダーに手で入れてください。</li></ol>
-      <p class="small">退院予定日を変えたときは、前に入れたカレンダーの予定を消してから、もう一度入れ直してください。</p></div>`,
-    backup: `<h1>バックアップと機種変更</h1><div class="card"><h3>バックアップの取り方(月1回)</h3><ol class="steps">
-      <li>「設定」→「バックアップ」の<b>「書き出す」</b>を押します。</li>
-      <li><b>「"ファイル"に保存」</b>を選び、iCloud Drive などに保存します。</li></ol>
+      <li><b>「Appを開く」</b>を選び、<b>「PTサポート」</b>を選びます。</li>
+      <li>一覧に出ないときは、代わりに<b>「通知を表示」</b>で「PTサポートで今日やることを見ましょう」と入れます。</li></ol>
+      <p class="small">※「URLを開く」はSafariで開いてしまい、データが別になるので使わないでください。</p></div>`,
+    ics: `<h1>カレンダーにうまく入らないとき</h1><div class="card"><ol class="steps">
+      <li><b>「共有・ファイルに保存」</b>を押します。</li>
+      <li><b>「"ファイル"に保存」</b>を選び、保存します。</li>
+      <li>「ファイル」アプリで、保存したファイルを押します。</li>
+      <li><b>「すべてを追加」</b>を押します。</li>
+      <li>それでもだめなときは<b>「一覧をコピー」</b>で、カレンダーに手で入れてください。</li></ol>
+      <p class="small">退院予定日を変えたときは、前に入れた予定を消してから入れ直してください。</p></div>`,
+    backup: `<h1>バックアップと機種変更</h1><div class="card"><h3>バックアップ(月1回)</h3><ol class="steps">
+      <li>「設定」→<b>「書き出す」</b>を押します。</li>
+      <li><b>「"ファイル"に保存」</b>で iCloud Drive などに保存します。</li></ol>
       <h3>新しいiPhoneで戻す</h3><ol class="steps">
       <li>新しいiPhoneでアプリをホーム画面に追加し、暗証番号を決めます。</li>
-      <li>「設定」→<b>「読み込む」</b>を押し、保存したファイルを選びます。</li></ol>
-      <p class="small">バックアップのファイルには患者さんのイニシャルや予定が入っています。人に送ったり、共有のフォルダに置いたりしないでください。</p></div>`,
+      <li>「設定」→<b>「読み込む」</b>で保存したファイルを選びます。</li></ol>
+      <p class="small">バックアップには患者さんのイニシャルや記録が入っています。人に送ったり、共有のフォルダに置いたりしないでください。</p></div>`,
+    ai: `<h1>「AI用にコピー」の使い方</h1><div class="card"><p>このアプリはAIにつながっていません。文章を整えたいときは、あなたが使っているAIのアプリに貼り付けます。</p><ol class="steps">
+      <li>患者ページの「書類」で<b>「AI用にコピー」</b>を押します(お願いの文と下書きがまとめてコピーされます)。</li>
+      <li>AIのアプリを開いて、入力欄に貼り付けて送ります。</li>
+      <li>できた文章を確かめて、必要ならアプリの下書き欄に貼り戻して保存します。</li></ol>
+      <p class="small">名前・住所の番地・生年月日・IDは、このアプリにもAIにも入れないでください。AIの答えは必ず自分で確かめてください。勤め先にAIの使い方の決まりがあるときは、それに従ってください。</p></div>`,
   };
   return back + (pages[topic] || '');
 }
@@ -484,26 +369,27 @@ function viewHelp(topic) {
 function render() {
   const raw = location.hash.slice(1) || '/today';
   const [path, query] = raw.split('?');
-  const [, route, arg] = path.split('/');
+  const [, route, arg, arg2] = path.split('/');
   const views = {
     today: viewToday,
     week: () => viewWeek(Number(arg) || 0),
     patients: viewPatients,
-    patient: () => viewPatient(arg, query),
+    patient: () => viewPatient(arg, arg2 || 'main', query),
     'patient-new': () => viewPatientForm(null),
     'patient-edit': () => viewPatientForm(arg),
     calendar: () => viewCalendar(arg),
     plan: () => viewPlan(arg || monthKey(today())),
+    review: () => viewReview(arg),
     archive: viewArchive,
     settings: viewSettings,
     help: () => viewHelp(arg),
   };
-  for (const k of Object.keys(texts)) delete texts[k];
-  const html = (views[route] || viewToday)();
-  $('#main').innerHTML = html;
-  const tab = { today: 'today', week: 'week', patients: 'patients', patient: 'patients', 'patient-new': 'patients', 'patient-edit': 'patients', archive: 'patients', calendar: 'calendar', settings: 'settings', help: 'settings', plan: 'today' }[route] || 'today';
+  clearTexts();
+  $('#main').innerHTML = (views[route] || viewToday)();
+  const tab = { patients: 'patients', patient: 'patients', 'patient-new': 'patients', 'patient-edit': 'patients', archive: 'patients', calendar: 'calendar', settings: 'settings', help: 'settings', week: 'week', review: 'week' }[route] || 'today';
   document.querySelectorAll('#tabbar a').forEach((a) => a.classList.toggle('on', a.dataset.tab === tab));
 }
+setRender(render);
 let lastRoute = '';
 window.addEventListener('hashchange', () => {
   const r = location.hash.split('?')[0];
@@ -512,44 +398,8 @@ window.addEventListener('hashchange', () => {
   lastRoute = r;
 });
 
-// ---------- 予定の入力(下から出る画面) ----------
-function openEventSheet({ pid, eid, type }) {
-  const e = eid ? S.events.find((x) => x.id === eid) : null;
-  const p = byId(e ? e.patientId : pid);
-  if (!p) return;
-  const v = e || { type: type || 'firstConf', title: '', date: '', time: '', checklist: null };
-  const cl = (v.checklist || S.settings.visitChecklist.map((t) => ({ text: t, done: false }))).map((c) => c.text).join('\n');
-  openSheet(`${L.label(p)} の予定${e ? 'を編集' : 'を追加'}`, `<form data-form="event" data-pid="${p.id}" data-eid="${e ? e.id : ''}">
-    <label class="f" for="evType">種類</label>
-    <select id="evType" name="type">${Object.entries(L.EVENT_TYPES).map(([k, n]) => `<option value="${k}" ${v.type === k ? 'selected' : ''}>${n}</option>`).join('')}</select>
-    <div id="evTitleBox" ${v.type === 'other' ? '' : 'hidden'}><label class="f" for="evTitle">予定の名前</label><input type="text" id="evTitle" name="title" value="${esc(v.title)}" placeholder="例:装具の採型"></div>
-    <label class="f" for="evDate">日にち</label><input type="date" id="evDate" name="date" value="${esc(v.date)}" required>
-    <label class="f" for="evTime">時間(なくてもOK)</label><input type="time" id="evTime" name="time" value="${esc(v.time)}">
-    <div id="evListBox" ${v.type === 'homeVisit' ? '' : 'hidden'}><label class="f" for="evList">持ち物(1行に1つ)</label><textarea id="evList" name="checklist" rows="5">${esc(cl)}</textarea></div>
-    <div class="hint">前日(休みなら前の出勤日)に「今日」の画面でお知らせします。</div>
-    <div class="btns"><button class="btn primary block" type="submit">保存</button></div>
-    ${e ? `<div class="btns"><button class="btn danger" type="button" data-act="deleteEvent" data-eid="${e.id}">この予定を消す</button></div>` : ''}
-  </form>`);
-  $('#evType').addEventListener('change', (ev) => {
-    $('#evTitleBox').hidden = ev.target.value !== 'other';
-    $('#evListBox').hidden = ev.target.value !== 'homeVisit';
-  });
-}
-
-// ---------- iPhoneのカレンダー(.ics) ----------
-let currentIcs = null;
-function showIcs(title, items, filename) {
-  if (!items.length) return toast('これから先の期日・予定はありません');
-  currentIcs = { text: L.buildIcs(items), filename, items };
-  const list = items.map((it) => `${fmt(it.date)} ${it.time} ${it.title}`).join('\n');
-  openSheet(title, `<p class="sub">次の${items.length}件を、通知つきでカレンダーに入れます。</p><pre class="draft">${esc(list)}</pre>
-    <div class="btns"><button class="btn primary" data-act="icsOpen">カレンダーに入れる</button><button class="btn" data-act="icsShare">共有・ファイルに保存</button>${copyBtn(list, '一覧をコピー')}</div>
-    <p class="small" style="margin-top:12px">うまく入らないときは「共有・ファイルに保存」→「"ファイル"に保存」→ ファイルアプリでそのファイルを開く →「すべてを追加」。<a href="#/help/ics" data-act="closeSheet">くわしく</a></p>`);
-}
-function icsFile() {
-  return new File([currentIcs.text], currentIcs.filename, { type: 'text/calendar' });
-}
-async function shareFile(file) {
+// ---------- バックアップ ----------
+export async function shareFile(file) {
   if (navigator.canShare && navigator.canShare({ files: [file] })) {
     try {
       await navigator.share({ files: [file] });
@@ -560,7 +410,7 @@ async function shareFile(file) {
   }
   return false;
 }
-function downloadFile(file) {
+export function downloadFile(file) {
   const url = URL.createObjectURL(file);
   const a = document.createElement('a');
   a.href = url;
@@ -570,13 +420,10 @@ function downloadFile(file) {
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 30000);
 }
-
-// ---------- バックアップ ----------
 async function doBackup() {
   const data = await db.exportAll();
-  const t = today();
-  const payload = JSON.stringify({ app: 'pt-support', version: 1, exportedAt: nowIso(), data }, null, 1);
-  const file = new File([payload], `PTサポート_バックアップ_${t}.json`, { type: 'application/json' });
+  const payload = JSON.stringify({ app: 'pt-support', version: 2, exportedAt: nowIso(), data });
+  const file = new File([payload], `PTサポート_バックアップ_${today()}.json`, { type: 'application/json' });
   const r = isStandalone() || /iPhone|iPad/.test(navigator.userAgent) ? await shareFile(file) : false;
   if (r === 'abort') return;
   if (!r) downloadFile(file);
@@ -590,7 +437,6 @@ async function doRestore(file) {
     const obj = JSON.parse(await file.text());
     if (obj.app !== 'pt-support' || !obj.data) throw new Error('形式');
     if (!confirm('今このiPhoneに入っているデータを、バックアップの中身に置きかえます。よろしいですか?')) return;
-    // 暗証番号は今のものを残す
     const keep = { pinHash: S.settings.pinHash, pinSalt: S.settings.pinSalt };
     const kv = (obj.data.kv || []).map((r) => (r.key === 'settings' ? { ...r, ...keep } : r));
     await db.importAll({ ...obj.data, kv: kv.length ? kv : [{ ...S.settings }] });
@@ -616,22 +462,20 @@ async function hashPin(pin, salt) {
 }
 let locked = false;
 let lastActive = Date.now();
-
 function pinPad(title, sub, onDone, opts = {}) {
   const el = $('#lock');
   let pin = '';
   el.hidden = false;
   const draw = () => {
-    el.innerHTML = `<div class="setup-box" style="text-align:center">${opts.top || ''}<h2>${esc(title)}</h2><div class="sub">${esc(sub)}</div>
+    el.innerHTML = `<div class="setup-box" style="text-align:center"><h2>${esc(title)}</h2><div class="sub">${esc(sub)}</div>
       <div class="pin-dots" style="justify-content:center">${[0, 1, 2, 3].map((i) => `<i class="${i < pin.length ? 'on' : ''}"></i>`).join('')}</div>
-      <div class="pad" style="margin:0 auto">${[1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => `<button data-n="${n}">${n}</button>`).join('')}
+      <div class="pad">${[1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => `<button data-n="${n}">${n}</button>`).join('')}
       <button class="ghost" data-n="cancel">${opts.cancel ? 'やめる' : ''}</button><button data-n="0">0</button><button class="ghost" data-n="del">消す</button></div>
       ${opts.forgot ? '<button class="linkbtn" data-n="forgot">暗証番号を忘れたとき</button>' : ''}</div>`;
   };
   draw();
   el.onclick = async (ev) => {
     const b = ev.target.closest('button');
-    // 前の画面のボタン(「次へ」など)の押下は数えない
     if (!b || !el.contains(b) || !b.dataset.n) return;
     const n = b.dataset.n;
     if (n === 'del') pin = pin.slice(0, -1);
@@ -716,92 +560,16 @@ setInterval(() => { if (!locked && S.settings?.pinHash && idleTooLong()) lockNow
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') {
     if (!locked && S.settings?.pinHash && idleTooLong()) lockNow();
-    else if (!locked) render(); // 日付が変わっていたら計算し直す
+    else if (!locked && $('#sheet').hidden) render(); // 日付が変わっていたら計算し直す
   }
 });
 
-// ---------- ボタンの動き ----------
-const actions = {
+// ---------- ボタンの動き(共通) ----------
+Object.assign(actions, {
   closeSheet: () => closeSheet(),
   copy: (d) => copyText(texts[d.k] || ''),
   ui: (d) => {
     S.ui[d.k] = d.k === 'mineOnly' ? d.v === '1' : d.v;
-    render();
-  },
-  async summaryDone(d) {
-    const p = byId(d.pid);
-    p.summaryDone = today();
-    await savePatient(p);
-    cheer();
-    render();
-  },
-  async summaryUndo(d) {
-    const p = byId(d.pid);
-    p.summaryDone = null;
-    await savePatient(p);
-    render();
-  },
-  async reportDone(d) {
-    const p = byId(d.pid);
-    if (!L.visitDate(p, S.events)) return openEventSheet({ pid: p.id, type: 'homeVisit' });
-    p.homeReportDone = today();
-    await savePatient(p);
-    cheer();
-    render();
-  },
-  async reportUndo(d) {
-    const p = byId(d.pid);
-    p.homeReportDone = null;
-    await savePatient(p);
-    render();
-  },
-  async visitNeeded(d) {
-    const p = byId(d.pid);
-    p.homeVisitNeeded = d.v === '1';
-    await savePatient(p);
-    render();
-  },
-  async toggleAdmit(d) {
-    const p = byId(d.pid);
-    p[d.key] = p[d.key] ? null : today();
-    await savePatient(p);
-    if (p[d.key]) cheer();
-    render();
-  },
-  editPreState(d) {
-    const p = byId(d.pid);
-    openSheet(`${L.label(p)} 入院前の状態`, `<textarea id="sheetPre" rows="6" placeholder="例:独歩・屋外も自立、階段手すりあり">${esc(p.preState || '')}</textarea>
-      <div class="btns"><button class="btn primary block" data-act="savePreState" data-pid="${p.id}" data-from="sheet">保存</button></div>`);
-  },
-  async savePreState(d) {
-    const p = byId(d.pid);
-    const el = d.from === 'sheet' ? $('#sheetPre') : $('#preState');
-    p.preState = el.value.trim();
-    await savePatient(p);
-    closeSheet();
-    cheer();
-    render();
-  },
-  async saveAdl(d) {
-    const p = byId(d.pid);
-    const adl = { ...(p.adl || {}) };
-    for (const [k] of L.ADL_ITEMS) if (k !== 'dischargeDate') adl[k] = ($(`#adl-${k}`)?.value || '').trim();
-    adl.updatedAt = today();
-    p.adl = adl;
-    // 更新の記録を残す(第2段階の振り返りでも使える)
-    p.adlHistory = [...(p.adlHistory || []), { at: nowIso(), values: adl }].slice(-30);
-    await savePatient(p);
-    cheer();
-    render();
-  },
-  addEvent: (d) => openEventSheet({ pid: d.pid, type: d.type }),
-  editEvent: (d) => openEventSheet({ eid: d.eid }),
-  async deleteEvent(d) {
-    if (!confirm('この予定を消しますか?')) return;
-    await db.del('events', d.eid);
-    S.events = S.events.filter((e) => e.id !== d.eid);
-    closeSheet();
-    toast('消しました');
     render();
   },
   async evCheck(d) {
@@ -852,35 +620,6 @@ const actions = {
     }
     render();
   },
-  async archive(d) {
-    const p = byId(d.pid);
-    if (!confirm(`${L.label(p)} を退院済みにしますか?(お知らせが止まります。あとで戻せます)`)) return;
-    p.archived = true;
-    p.archivedAt = today();
-    await savePatient(p);
-    toast('おつかれさまでした。' + praise());
-    location.hash = '#/patients';
-  },
-  async unarchive(d) {
-    const p = byId(d.pid);
-    p.archived = false;
-    await savePatient(p);
-    render();
-  },
-  async deletePatient(d) {
-    const p = byId(d.pid);
-    if (!confirm(`${L.label(p)} のデータをすべて消しますか?元には戻せません。\n(退院した人は「退院済みにする」がおすすめです)`)) return;
-    await db.del('patients', p.id);
-    for (const e of S.events.filter((x) => x.patientId === p.id)) await db.del('events', e.id);
-    S.patients = S.patients.filter((x) => x.id !== p.id);
-    S.events = S.events.filter((x) => x.patientId !== p.id);
-    toast('消しました');
-    location.hash = '#/patients';
-  },
-  icsPatient(d) {
-    const p = byId(d.pid);
-    showIcs(`${L.label(p)} をカレンダーへ`, L.calendarItemsForPatient(p, S, today()), `PTサポート_${p.initials}_${today()}.ics`);
-  },
   icsAll() {
     const t = today();
     const items = L.activePatients(S).flatMap((p) => L.calendarItemsForPatient(p, S, t)).concat(L.calendarItemsPlans(S, t));
@@ -889,18 +628,6 @@ const actions = {
   },
   icsPlans() {
     showIcs('計画書のお知らせ(毎月1日)', L.calendarItemsPlans(S, today()), `PTサポート_計画書_${today()}.ics`);
-  },
-  icsOpen() {
-    if (!currentIcs) return;
-    // Safariでは、ファイルを開くと「カレンダーに追加」の画面が出る
-    const url = URL.createObjectURL(icsFile());
-    location.href = url;
-    setTimeout(() => URL.revokeObjectURL(url), 60000);
-  },
-  async icsShare() {
-    if (!currentIcs) return;
-    const r = await shareFile(icsFile());
-    if (!r) downloadFile(icsFile());
   },
   backup: () => doBackup(),
   restore: () => {
@@ -912,6 +639,7 @@ const actions = {
     S.settings.name = $('#setName').value.trim();
     S.settings.lockMinutes = Number($('#setLock').value) || 5;
     S.settings.notifyTime = $('#setTime').value || '07:30';
+    S.settings.walkLimitMin = Math.max(1, Number($('#setWalk').value) || 15);
     await saveSettings();
     toast('保存しました');
     render();
@@ -947,15 +675,20 @@ const actions = {
     await saveSettings();
     toast('保存しました');
   },
+  async saveReview(d) {
+    await saveRecord({ id: `review:${d.month}`, type: 'review', month: d.month, date: d.month + '-28', memo: $('#reviewMemo').value.trim() });
+    await setFlag(`review:${d.month}`);
+    cheer();
+  },
   lockNow: () => lockNow(),
   async wipe() {
-    if (!confirm('すべてのデータ(患者・予定・設定・暗証番号)を消します。元には戻せません。\n先にバックアップを取ることをおすすめします。消しますか?')) return;
+    if (!confirm('すべてのデータ(患者・予定・記録・設定・暗証番号)を消します。元には戻せません。\n先にバックアップを取ることをおすすめします。消しますか?')) return;
     if (!confirm('本当に消しますか?')) return;
     await db.clearAll();
     location.hash = '';
     location.reload();
   },
-};
+});
 document.addEventListener('click', (ev) => {
   const el = ev.target.closest('[data-act]');
   if (!el || locked) return;
@@ -963,62 +696,52 @@ document.addEventListener('click', (ev) => {
   const fn = actions[el.dataset.act];
   if (fn) fn(el.dataset, el, ev);
 });
+document.addEventListener('change', (ev) => {
+  const el = ev.target.closest('[data-chg]');
+  if (!el || locked) return;
+  const fn = changes[el.dataset.chg];
+  if (fn) fn(el.dataset, el, ev);
+});
 $('#sheet').addEventListener('click', (ev) => { if (ev.target.id === 'sheet') closeSheet(); });
 
-// ---------- 入力フォームの保存 ----------
+// ---------- 患者の登録フォーム ----------
 document.addEventListener('submit', async (ev) => {
   const f = ev.target;
+  if (f.dataset.form !== 'patient') return;
   ev.preventDefault();
   const fd = new FormData(f);
-  if (f.dataset.form === 'patient') {
-    const initials = String(fd.get('initials') || '').trim();
-    if (!initials) return alert('イニシャルかあだ名を入れてください');
-    if (/[一-鿿]{2,}/.test(initials) || initials.length > 6) {
-      if (!confirm('名前のように見えます。名前は入れないでください。\nこのまま保存しますか?')) return;
-    }
-    const old = f.dataset.id ? byId(f.dataset.id) : null;
-    const p = old ? { ...old } : { id: uid(), createdAt: nowIso(), archived: false, adl: {}, adlHistory: [] };
-    Object.assign(p, {
-      initials,
-      room: String(fd.get('room') || '').trim(),
-      admitDate: fd.get('admitDate') || '',
-      dischargeDate: fd.get('dischargeDate') || '',
-      memo: String(fd.get('memo') || '').trim(),
-      mine: fd.get('mine') === 'on',
-      homeVisitNeeded: fd.get('homeVisitNeeded') === 'on',
-    });
-    if (old && p.dischargeDate !== old.dischargeDate) {
-      p.dischargeHistory = [...(old.dischargeHistory || []), { from: old.dischargeDate, to: p.dischargeDate, at: nowIso() }];
-    }
-    await savePatient(p);
-    if (!S.settings.firstUseAt) { S.settings.firstUseAt = nowIso(); await saveSettings(); }
-    location.hash = `#/patient/${p.id}`;
-    if (old && old.dischargeDate !== p.dischargeDate && p.dischargeDate) {
-      openSheet('退院予定日を変えました', `<p>サマリー・家屋調査などのお知らせと期日を、新しい退院予定日(${fmtLong(p.dischargeDate)})で計算し直しました。</p>
-        <p><b>iPhoneのカレンダーに入れていた予定も入れ直してください。</b><br><span class="sub">前に入れた「${esc(L.label(p))} 〜」の予定をカレンダーから消してから、下のボタンで入れ直します。</span></p>
-        <div class="btns"><button class="btn primary" data-act="icsPatient" data-pid="${p.id}">カレンダーに入れ直す</button><button class="btn" data-act="closeSheet">あとで</button></div>`);
-    } else {
-      toast(old ? '保存しました。' + praise() : '登録しました。入院時のチェックから始めましょう');
-    }
-  } else if (f.dataset.form === 'event') {
-    const type = fd.get('type');
-    const date = fd.get('date');
-    if (!isDate(date)) return alert('日にちを入れてください');
-    const old = f.dataset.eid ? S.events.find((x) => x.id === f.dataset.eid) : null;
-    const e = old ? { ...old } : { id: uid(), patientId: f.dataset.pid, createdAt: nowIso() };
-    e.type = type;
-    e.title = type === 'other' ? String(fd.get('title') || '').trim() || '予定' : '';
-    e.date = date;
-    e.time = fd.get('time') || '';
-    if (type === 'homeVisit') {
-      const lines = String(fd.get('checklist') || '').split('\n').map((s) => s.trim()).filter(Boolean);
-      const prev = Object.fromEntries((old?.checklist || []).map((c) => [c.text, c.done]));
-      e.checklist = lines.map((text) => ({ text, done: !!prev[text] }));
-    } else e.checklist = null;
-    await saveEvent(e);
-    closeSheet();
-    toast('予定を保存しました。' + praise());
-    render();
+  const initials = String(fd.get('initials') || '').trim();
+  if (!initials) return alert('イニシャルかあだ名を入れてください');
+  if (/[一-鿿]{2,}/.test(initials) || initials.length > 6) {
+    if (!confirm('名前のように見えます。名前は入れないでください。\nこのまま保存しますか?')) return;
+  }
+  const old = f.dataset.id ? byId(f.dataset.id) : null;
+  const p = old ? { ...old } : { id: uid(), createdAt: nowIso(), archived: false, adl: {}, adlHistory: [], env: {}, family: [], system: {}, orthosis: {} };
+  Object.assign(p, {
+    initials,
+    gender: fd.get('gender') || '',
+    ageGroup: fd.get('ageGroup') || '',
+    room: String(fd.get('room') || '').trim(),
+    admitDate: fd.get('admitDate') || '',
+    kaifukuDate: fd.get('kaifukuDate') || '',
+    diseaseLimit: Number(fd.get('diseaseLimit')) || '',
+    dischargeDate: fd.get('dischargeDate') || '',
+    memo: String(fd.get('memo') || '').trim(),
+    mine: fd.get('mine') === 'on',
+    homeVisitNeeded: fd.get('homeVisitNeeded') === 'on',
+  });
+  if (old && p.dischargeDate !== old.dischargeDate) {
+    p.dischargeHistory = [...(old.dischargeHistory || []), { from: old.dischargeDate, to: p.dischargeDate, at: nowIso() }];
+  }
+  await savePatient(p);
+  if (!S.settings.firstUseAt) { S.settings.firstUseAt = nowIso(); await saveSettings(); }
+  location.hash = `#/patient/${p.id}`;
+  if (old && old.dischargeDate !== p.dischargeDate && p.dischargeDate) {
+    openSheet('退院予定日を変えました', `<p>サマリー・家屋調査などのお知らせと期日を、新しい退院予定日(${fmtLong(p.dischargeDate)})で計算し直しました。</p>
+      <p><b>iPhoneのカレンダーに入れていた予定も入れ直してください。</b><br><span class="sub">前に入れた「${esc(L.label(p))} 〜」の予定をカレンダーから消してから、下のボタンで入れ直します。</span></p>
+      <div class="btns"><button class="btn primary" data-act="icsPatient" data-pid="${p.id}">カレンダーに入れ直す</button><button class="btn" data-act="closeSheet">あとで</button></div>`);
+  } else {
+    toast(old ? '保存しました。' + praise() : '登録しました。入院時のことから始めましょう');
   }
 });
 
