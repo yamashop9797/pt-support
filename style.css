@@ -322,6 +322,15 @@ h4 { margin: 16px 0 6px; font-size: 16px; }
 .romhead span:first-child { text-align: left; }
 .romrow { padding: 5px 0; border-bottom: 1px solid var(--line); font-size: 15px; }
 .romrow input { padding: 8px; text-align: center; }
+/* 休み */
+.holgrid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; margin: 8px 0; }
+.holgrid .wd { text-align: center; font-size: 12px; color: var(--sub); }
+.hday { border: 1px solid var(--line); border-radius: 10px; background: #fff; min-height: 44px; font-size: 15px; padding: 0; color: inherit; }
+.hday.we { color: #b0453c; }
+.hday.on { background: #2f8f5b; border-color: #2f8f5b; color: #fff; font-weight: 700; }
+.preitem { border-top: 1px solid var(--line); padding-top: 4px; margin-top: 4px; }
+.preitem .btns { margin: 2px 0 6px 34px; }
+.check.nocheck { cursor: default; padding-left: 0; }
 .dxwarn { margin-top: 2px; color: var(--red, #d33); font-weight: 700; }
 /* 脊損の感覚表 */
 .sgrid { display: grid; grid-template-columns: 44px repeat(4, minmax(0, 1fr)) 34px; gap: 4px; align-items: center; padding: 2px 0; }

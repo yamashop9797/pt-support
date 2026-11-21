@@ -310,6 +310,127 @@ export function computeNotices(state, today) {
   return out;
 }
 
+// ---------- 休み前にやっておくこと ----------
+// 続いた休みを1つのかたまりにする(from から days 日先まで)
+export function holidayBlocks(holidays, from, days = 60) {
+  const out = [];
+  let cur = null;
+  for (let i = 0; i <= days; i++) {
+    const d = addDays(from, i);
+    if (holidays.has(d)) {
+      if (cur) cur.end = d; else cur = { start: d, end: d };
+    } else if (cur) { out.push(cur); cur = null; }
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+// date より前の n 番目の出勤日
+export function workdayBefore(date, n, holidays) {
+  let d = date;
+  for (let k = 0, i = 0; k < n && i < 120; i++) {
+    d = addDays(d, -1);
+    if (!holidays.has(d)) k++;
+  }
+  return d;
+}
+export function nextWorkday(date, holidays) {
+  let d = date;
+  for (let i = 0; i < 60 && holidays.has(d); i++) d = addDays(d, 1);
+  return d;
+}
+const EV_TODO = {
+  firstConf: ['初回カンファ', '伝えることを下書きして、代わりの人に渡す'],
+  dischargeConf: ['退院前カンファ', '下書きを作って、代わりの人に渡す'],
+  homeVisit: ['家屋訪問', '代わりの人に頼む・持ち物と見る所を渡す'],
+  other: ['予定', '休み中なので、どうするか決めておく'],
+};
+// ひとつの休みについて、休み中〜休み明けの日に来るものを洗い出す
+export function preHolidayItems(state, block, today) {
+  const { events, holidays, settings, plans = {}, flags = new Set() } = state;
+  const back = nextWorkday(addDays(block.end, 1), holidays);
+  const inWin = (d) => isDate(d) && d >= block.start && d <= back;
+  const items = [];
+  const add = (o) => items.push({ ...o, soon: o.date === back, key: `pre:${block.start}:${o.kind}:${o.pid || ''}:${o.date}` });
+  for (const p of activePatients(state)) {
+    const L = label(p);
+    const d = p.dischargeDate;
+    if (inWin(d)) {
+      add({ kind: 'discharge', pid: p.id, date: d, text: `${L} 退院`, todo: `${p.summaryDone ? '' : 'サマリーを仕上げる・'}退院時のFIMと評価・申し送り` });
+    } else if (isDate(d) && !p.summaryDone && inWin(addDays(d, -7))) {
+      add({ kind: 'summary', pid: p.id, date: addDays(d, -7), text: `${L} サマリーを始める時期(退院 ${fmt(d)})`, todo: '休み前に書き始める' });
+    }
+    if (isDate(d) && p.homeVisitNeeded !== false && !visitDate(p, events)) {
+      for (const [n, t] of [[30, '家屋調査の日程を決める目安'], [45, '家屋調査の日程調整を始める時期']]) {
+        if (inWin(addDays(d, -n))) add({ kind: `visit${n}`, pid: p.id, date: addDays(d, -n), text: `${L} ${t}`, todo: '休み前に本人・家族と日程を決める' });
+      }
+    }
+    if (isDate(p.kaifukuDate) && p.diseaseLimit) {
+      const lim = addDays(p.kaifukuDate, Number(p.diseaseLimit) - 1);
+      if (inWin(lim)) add({ kind: 'limit', pid: p.id, date: lim, text: `${L} 算定上限の日`, todo: '退院日や今後のことを先に確認する' });
+    }
+    for (const c of adlConfDates(p, settings.adlTable, block.start, back)) {
+      add({ kind: 'adl', pid: p.id, date: c, text: `${L} 病棟ADLカンファ`, todo: 'ADL8項目を更新して下書きを渡す', draft: adlDraft(p, today, c) });
+    }
+  }
+  const byId = Object.fromEntries(state.patients.map((p) => [p.id, p]));
+  for (const e of events) {
+    const p = byId[e.patientId];
+    if (!p || p.archived || p.mine === false || !inWin(e.date)) continue;
+    const [name, todo] = EV_TODO[e.type] || EV_TODO.other;
+    const it = { kind: `ev-${e.id}`, pid: p.id, date: e.date, text: `${label(p)} ${e.type === 'other' ? e.title || name : name}${e.time ? ` ${e.time}` : ''}`, todo };
+    if (e.type === 'dischargeConf') it.draft = dischargeConfDraft(p, today, e.date);
+    add(it);
+  }
+  if (activePatients(state).length) {
+    for (let d = block.start; d <= back; d = addDays(d, 1)) {
+      const mk = monthKey(d);
+      if (d.slice(8) === '01') add({ kind: 'planSelect', date: d, text: `${Number(mk.slice(5))}月の計画書の対象者チェック`, todo: '休み前に対象者を選んでおく' });
+      const pl = plans[mk];
+      if (d === endOfMonth(mk) && pl && (pl.targets || []).some((id) => byId[id] && !byId[id].archived && !(pl.explained || []).includes(id))) {
+        add({ kind: 'planExplain', date: d, text: `${Number(mk.slice(5))}月の計画書の説明の締め(月末)`, todo: 'まだ説明していない人に、休み前に説明する' });
+      }
+    }
+  }
+  items.sort((a, b) => a.date.localeCompare(b.date) || a.text.localeCompare(b.text));
+  return { back, items: items.filter((i) => !flags.has(i.key)), all: items };
+}
+// 今日出す「休み前にやっておくこと」(休みの n 出勤日前〜最後の出勤日)
+export function preHolidayPlans(state, today, { any = false } = {}) {
+  const n = state.settings.preHolidayDays ?? 3;
+  const out = [];
+  for (const b of holidayBlocks(state.holidays, addDays(today, 1), 45)) {
+    const last = prevWorkday(addDays(b.start, -1), state.holidays);
+    const from = workdayBefore(b.start, n, state.holidays);
+    if (!any && (today < from || today > last)) continue;
+    const r = preHolidayItems(state, b, today);
+    out.push({ ...b, last, from, back: r.back, items: r.items, all: r.all, workdaysLeft: countWorkdays(today, last, state.holidays) });
+  }
+  return out;
+}
+function countWorkdays(from, to, holidays) {
+  let n = 0;
+  for (let d = from; d <= to; d = addDays(d, 1)) if (!holidays.has(d)) n++;
+  return n;
+}
+// 代わりの人への申し送り(名前なし)
+export function handoverText(state, plan, extraNotes = () => []) {
+  const L = [`【休み中の申し送り】${fmt(plan.start)}${plan.end !== plan.start ? `〜${fmt(plan.end)}` : ''} お休み(${fmt(plan.back)}から出勤)`];
+  const byPid = {};
+  const general = [];
+  for (const it of plan.all) (it.pid ? (byPid[it.pid] = byPid[it.pid] || []) : general).push(it);
+  for (const p of activePatients(state)) {
+    const list = byPid[p.id] || [];
+    const notes = extraNotes(p);
+    if (!list.length && !notes.length) continue;
+    L.push('', `■${label(p)}${p.room ? `(${p.room})` : ''}`);
+    for (const it of list) L.push(`・${fmt(it.date)} ${it.text.replace(`${label(p)} `, '')}`);
+    for (const n of notes) L.push(`・注意:${n}`);
+  }
+  if (general.length) L.push('', '■全体', ...general.map((it) => `・${fmt(it.date)} ${it.text}`));
+  if (!plan.all.length) L.push('', '休み中に来る期日・予定はありません。');
+  return L.join('\n');
+}
+
 // ---------- 今週の予定(日ごと) ----------
 export function agenda(state, from, to) {
   const { events, holidays, settings } = state;

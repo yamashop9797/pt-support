@@ -22,7 +22,7 @@ changes.formatToggle = (d, el) => {
 };
 import { viewPatient, showIcs } from './patient.js';
 
-export const APP_VERSION = '2.2.0';
+export const APP_VERSION = '2.3.0';
 
 const isStandalone = () => navigator.standalone === true || matchMedia('(display-mode: standalone)').matches;
 export const leftText = (p, t) => {
@@ -56,11 +56,12 @@ function viewToday() {
     .filter((x) => x.list.some((c) => !c.done));
   const name = S.settings.name ? `${esc(S.settings.name)}さん、` : '';
   let h = `<div class="hello">${name}${greeting()}</div>${patientTabs()}
-    <h1>今日やること</h1><div class="sub">${fmtLong(t)}${S.holidays.has(t) ? ' <span class="tag holiday-tag">お休み</span>' : ''}</div>
+    <div class="topbar"><h1>今日やること</h1><button class="btn sm" data-act="holidaySheet">🌴 休みを入れる</button></div><div class="sub">${fmtLong(t)}${S.holidays.has(t) ? ' <span class="tag holiday-tag">お休み</span>' : ''}</div>
     <div class="word-line">${esc(dailyMessage(t))}</div>`;
   if (!S.patients.filter((p) => !p.archived).length) {
     h += `<div class="card"><h3>はじめに</h3><p>上の「+ 追加」から担当の患者さんを登録すると、期日やお知らせを自動で出します。</p></div>`;
   }
+  for (const pl of L.preHolidayPlans(S, t)) h += preHolidayCard(pl, t);
   for (const n of big) h += bigCard(n);
   for (const { p, list } of fresh) {
     const left = list.filter((c) => !c.done);
@@ -71,6 +72,94 @@ function viewToday() {
   if (!notices.length && !fresh.length && S.patients.length) h += `<div class="empty">今日やることはありません。<br>いい一日を過ごしてください。</div>`;
   return h;
 }
+// ---------- 休み前にやっておくこと ----------
+function patientNotes(p) {
+  const out = [];
+  if (p.format === 'ortho') {
+    const prec = [...((p.ortho && p.ortho.precautions) || []), p.ortho && p.ortho.precMemo].filter(Boolean);
+    if (prec.length) out.push(`禁止の動き ${prec.join('、')}`);
+    const wb = OR.currentWB(p, S.records.filter((r) => r.patientId === p.id));
+    if (wb) out.push(`荷重 ${wb.wb}`);
+  }
+  if (p.format === 'sci') {
+    const lv = SC.currentLevel(p, S.records.filter((r) => r.patientId === p.id));
+    if (SC.adWarning(lv)) out.push(`${lv}の損傷。自律神経過反射に注意`);
+  }
+  return out;
+}
+function preItems(pl, withChecks) {
+  if (!pl.items.length) return `<div class="n-body">${pl.all.length ? '全部済みました。安心して休んでください。' : '休み中に来る期日・予定はありません。安心して休んでください。'}</div>`;
+  return pl.items.map((it) => `<div class="preitem">${withChecks ? `<div class="check" data-act="flag" data-key="${esc(it.key)}"><span class="box"></span>` : '<div class="check nocheck">'}<span class="ctext"><b>${fmt(it.date)}${it.soon ? '<span class="tag">休み明け</span>' : ''}</b> ${esc(it.text)}<br><span class="small">→ ${esc(it.todo)}</span></span></div>
+    ${withChecks && it.draft ? `<div class="btns">${copyBtn(it.draft, '下書きをコピー', 'sm')}${it.pid ? `<a class="btn sm" href="#/patient/${it.pid}?adl">ADLを更新</a>` : ''}</div>` : ''}</div>`).join('');
+}
+function preHolidayCard(pl, t) {
+  const lastDay = t === pl.last;
+  const range = `${fmt(pl.start)}${pl.end !== pl.start ? `〜${fmt(pl.end)}` : ''}`;
+  return `<div class="card notice lv-${lastDay ? 'red' : 'yellow'} prehol"><div class="n-title">🌴 休み前にやっておくこと</div>
+    <div class="n-body">${range} お休み。${lastDay ? '<b>今日が休み前の最後の出勤日です</b>' : `休み前の出勤はあと${pl.workdaysLeft}日(最後は${fmt(pl.last)})`}</div>
+    ${preItems(pl, true)}
+    <div class="btns">${copyBtn(L.handoverText(S, pl, patientNotes), '申し送りをコピー', 'primary')}<button class="btn" data-act="holidaySheet">休みを変える</button></div></div>`;
+}
+
+// 休みを入れる画面(下から出る)
+let holSel = null;
+let holUndo = null;
+function holidaySheetHtml() {
+  const t = today();
+  const days = Array.from({ length: 28 }, (_, i) => addDays(t, i + 1));
+  const first = weekday(days[0]);
+  const blanks = Array.from({ length: (first + 6) % 7 }, () => '<span></span>').join('');
+  return `<p class="sub">1回押すだけで休みになります。</p>
+    <div class="btns"><button class="btn primary" data-act="holidayQuick" data-date="${addDays(t, 1)}">明日(${fmt(addDays(t, 1))})</button><button class="btn primary" data-act="holidayQuick" data-date="${addDays(t, 2)}">あさって(${fmt(addDays(t, 2))})</button></div>
+    <h4>日を選ぶ(いくつでも。もう一度押すと外れます)</h4>
+    <div class="holgrid">${['月', '火', '水', '木', '金', '土', '日'].map((w) => `<span class="wd">${w}</span>`).join('')}${blanks}${days
+      .map((d) => `<button class="hday ${holSel.has(d) ? 'on' : ''} ${[0, 6].includes(weekday(d)) ? 'we' : ''}" data-act="holidayPick" data-date="${d}">${Number(d.slice(5, 7))}/${Number(d.slice(8))}</button>`)
+      .join('')}</div>
+    <div class="btns"><button class="btn primary block" data-act="holidaySave">この内容で休みにする</button></div>`;
+}
+async function saveHolidays(next) {
+  const t = today();
+  const before = new Set([...S.holidays].filter((d) => d > t));
+  for (const d of before) if (!next.has(d)) { S.holidays.delete(d); await db.del('holidays', d); }
+  for (const d of next) if (!S.holidays.has(d)) { S.holidays.add(d); await db.put('holidays', { date: d }); }
+  holUndo = before;
+  render();
+  showHolidayResult();
+}
+function showHolidayResult() {
+  const t = today();
+  const plans = L.preHolidayPlans(S, t, { any: true }).filter((pl) => pl.start <= addDays(t, 28));
+  const body = plans.length
+    ? plans.map((pl) => `<div class="card"><b>${fmt(pl.start)}${pl.end !== pl.start ? `〜${fmt(pl.end)}` : ''} お休み</b><div class="small">休み前の最後の出勤日:${fmt(pl.last)}。${fmt(pl.from)}からホームに「休み前にやっておくこと」を出します。</div>${preItems(pl, false)}
+      <div class="btns">${copyBtn(L.handoverText(S, pl, patientNotes), '申し送りをコピー', 'sm')}</div></div>`).join('')
+    : '<p>これから4週間に休みはありません。</p>';
+  openSheet('休みを保存しました', `${body}<div class="btns"><button class="btn" data-act="holidayUndo">元に戻す</button><button class="btn primary" data-act="closeSheet">閉じる</button></div>`);
+}
+Object.assign(actions, {
+  holidaySheet() {
+    holSel = new Set([...S.holidays].filter((d) => d > today()));
+    openSheet('休みを入れる', holidaySheetHtml());
+  },
+  holidayPick(d, el) {
+    if (holSel.has(d.date)) holSel.delete(d.date); else holSel.add(d.date);
+    el.classList.toggle('on');
+  },
+  async holidayQuick(d) {
+    const next = new Set([...S.holidays].filter((x) => x > today()));
+    next.add(d.date);
+    await saveHolidays(next);
+  },
+  async holidaySave() { await saveHolidays(holSel); },
+  async holidayUndo() {
+    if (!holUndo) return closeSheet();
+    const prev = holUndo;
+    await saveHolidays(prev);
+    holUndo = null;
+    closeSheet();
+    toast('元に戻しました');
+  },
+});
+
 export function checkAct(p, key) {
   switch (key) {
     case 'firstConf': return `data-act="addEvent" data-pid="${p.id}" data-type="firstConf"`;
@@ -607,7 +696,7 @@ setInterval(() => { if (!locked && S.settings?.pinHash && idleTooLong()) lockNow
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') {
     if (!locked && S.settings?.pinHash && idleTooLong()) lockNow();
-    else if (!locked && $('#sheet').hidden) render(); // 日付が変わっていたら計算し直す
+    else if (!locked && S.settings && $('#sheet').hidden) render(); // 日付が変わっていたら計算し直す
   }
 });
 
